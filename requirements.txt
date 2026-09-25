@@ -1,0 +1,9 @@
+pandas
+numpy
+matplotlib
+scikit-learn
+jupyter
+joblib
+spotipy
+python-dotenv
+Flask

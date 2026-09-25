@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TuneTwin AI</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='feedback.css') }}">
+  <script defer src="{{ url_for('static', filename='app.js') }}"></script>
+</head>
+<body>
+  <div class="page-shell">
+    <header class="topbar">
+      <a class="brand" href="{{ url_for('home') }}"><span class="brand-mark">♪</span> TuneTwin <span>AI</span></a>
+      <div class="connection">
+        {% if connected %}<span class="status-dot"></span><span>Spotify connected</span>
+        {% else %}<span class="status-dot off"></span><span>Spotify not connected</span>{% endif %}
+        <a class="connect-link" href="{{ url_for('spotify_connect') }}">{% if connected %}Reconnect{% else %}Connect Spotify{% endif %}</a>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero">
+        <p class="eyebrow">YOUR NEXT FAVORITE TRACK</p>
+        <h1>Find your song's <span>twin.</span></h1>
+        <p class="intro">Pick a track from the Spotify dataset. TuneTwin compares its sound and artist-genre tags, then finds five close matches with room for new artists.</p>
+        <div class="catalog-note"><strong>{{ "{:,.0f}".format(song_count) }}</strong> tracks · {{ features|length }} audio features · artist-level genre tags</div>
+        <div class="learning-note">LINUCB · {{ bandit_update_count }} feedback updates · Like +2 / Skip −1</div>
+      </section>
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}<section class="messages" aria-live="polite">{% for category, message in messages %}<div class="message {{ category }}">{{ message }}</div>{% endfor %}</section>{% endif %}
+      {% endwith %}
+
+      <section class="search-panel panel">
+        <div class="section-heading"><div><p class="eyebrow">01 / CHOOSE A SEED SONG</p><h2>What are you listening to?</h2></div><span class="step-number">01</span></div>
+        <label class="search-label" for="track-search">Search the local Spotify dataset</label>
+        <div class="search-wrap">
+          <span class="search-icon">⌕</span>
+          <input id="track-search" type="search" placeholder="Try “Often” or “The Weeknd”" autocomplete="off" aria-autocomplete="list" aria-controls="search-results">
+          <div id="search-results" class="search-results" role="listbox"></div>
+        </div>
+        <div id="selected-song" class="selected-song {% if not seed %}hidden{% endif %}">
+          <div><span class="selected-label">SELECTED TRACK</span><strong id="selected-name">{{ seed.name if seed else '' }}</strong><span id="selected-artist">{{ seed.artist if seed else '' }}</span></div>
+          <form action="{{ url_for('recommend_route') }}" method="post">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input id="selected-index" type="hidden" name="track_index" value="{{ seed.index if seed else '' }}">
+            <button class="button primary" type="submit">Find 5 matches <span>→</span></button>
+          </form>
+        </div>
+        <p class="hint">Recommendations use audio-feature similarity and available artist genre tags. Track IDs in the CSV are not assumed to be Spotify IDs.</p>
+      </section>
+
+      {% if seed %}
+      <section class="results-section">
+        <div class="section-heading result-heading"><div><p class="eyebrow">02 / PLAY & DISCOVER</p><h2>Made for <span>{{ seed.name }}</span></h2><p class="muted">by {{ seed.artist }}</p></div><span class="step-number">02</span></div>
+        <article class="seed-card panel">
+          <div class="record-icon">♫</div>
+          <div class="song-info"><span class="selected-label">YOUR SEED TRACK</span><h3>{{ seed.name }}</h3><p>{{ seed.artist }}</p>
+            <div class="tags">{% for genre in seed.genres %}<span class="tag">{{ genre }}</span>{% else %}<span class="tag muted-tag">Genre unavailable</span>{% endfor %}</div>
+          </div>
+          <form action="{{ url_for('play_track') }}" method="post">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="row_index" value="{{ seed.index }}"><input type="hidden" name="seed_index" value="{{ seed.index }}">
+            <button class="button outline" type="submit">▶ Play + queue 5</button>
+          </form>
+        </article>
+
+        <div class="recommendation-title"><div><h2>Five songs to try next</h2><p class="muted">Top-50 content pool · LinUCB reranking · adaptive artist variety</p></div><span class="count-pill">5 TRACKS</span></div>
+        <div class="recommendations">
+          {% for rec in recommendations %}
+          <article class="recommendation panel">
+            <div class="rec-index">{{ "%02d"|format(loop.index) }}</div>
+            <div class="song-info">
+              <h3>{{ rec.name }}</h3><p>{{ rec.artist }}</p>
+              <div class="tags">{% for genre in rec.genres %}<span class="tag">{{ genre }}</span>{% else %}<span class="tag muted-tag">Genre unavailable</span>{% endfor %}</div>
+              <div class="match-row"><span class="score-track"><span style="width: {{ (rec.score * 100)|round|int }}%"></span></span><span>{{ (rec.score * 100)|round|int }}% rank</span><span>Content {{ (rec.similarity * 100)|round|int }}%</span><span>LinUCB {{ (rec.bandit_score * 100)|round|int }}%</span>
+                {% if rec.match %}<span class="spotify-match">Spotify match {{ (rec.match.confidence * 100)|round|int }}%</span>{% else %}<span class="spotify-match unavailable">Spotify match unavailable</span>{% endif %}
+              </div>
+            </div>
+            <div class="rec-actions">
+              {% if rec.match and rec.match.url %}<a class="icon-button" href="{{ rec.match.url }}" target="_blank" rel="noopener noreferrer" aria-label="Open {{ rec.name }} on Spotify">↗</a>{% endif %}
+              <form action="{{ url_for('play_track') }}" method="post">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="row_index" value="{{ rec.index }}"><input type="hidden" name="seed_index" value="{{ seed.index }}">
+                <button class="button play-button" type="submit" aria-label="Play {{ rec.name }} and queue following recommendations">▶ Play + queue</button>
+              </form>
+              <form class="feedback-form" action="{{ url_for('record_feedback') }}" method="post">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="row_index" value="{{ rec.index }}"><input type="hidden" name="seed_index" value="{{ seed.index }}">
+                <button class="button feedback-like" type="submit" name="feedback" value="like" aria-label="Like {{ rec.name }} for TuneTwin">Like +2</button>
+                <button class="button feedback-skip" type="submit" name="feedback" value="skip" aria-label="Skip {{ rec.name }} for TuneTwin">Skip −1</button>
+              </form>
+            </div>
+          </article>
+          {% endfor %}
+        </div>
+        <p class="disclaimer">Like and Skip are explicit TuneTwin feedback; the app updates its local LinUCB model and does not save Likes to Spotify. Skipping a recommendation advances Spotify only if that exact song is currently playing. Queue actions append matches to Spotify's existing queue. Genres come from artist-level tags and are not verified track genres.</p>
+      </section>
+      {% endif %}
+    </main>
+
+    <footer><span>TuneTwin AI</span><span>Local Flask prototype · Spotify playback requires an authorized account and active device</span></footer>
+  </div>
+</body>
+</html>

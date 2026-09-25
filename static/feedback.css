@@ -1,0 +1,10 @@
+.rec-actions{flex:0 0 auto;display:flex;flex-direction:column;align-items:flex-end;gap:6px}
+.rec-actions form{margin:0}
+.feedback-form{display:flex;gap:4px}
+.feedback-like,.feedback-skip{font:9px var(--mono);padding:7px 8px;white-space:nowrap}
+.feedback-like{color:var(--green);background:#a9f06a10;border:1px solid #a9f06a40}
+.feedback-skip{color:#c5a5a5;background:#c65d5d10;border:1px solid #9e5d5d55}
+.feedback-like:hover{background:#a9f06a20}
+.feedback-skip:hover{background:#c65d5d22}
+.learning-note{margin-top:10px;font:10px var(--mono);color:#9ba7b1}
+@media(max-width:700px){.rec-actions{flex-direction:column-reverse;align-items:flex-end}.feedback-like,.feedback-skip{padding:6px}}
