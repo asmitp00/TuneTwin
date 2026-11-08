@@ -3,101 +3,528 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>TuneTwin AI</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='feedback.css') }}">
-  <script defer src="{{ url_for('static', filename='app.js') }}"></script>
+  <meta name="theme-color" content="#111018">
+  <link rel="icon" href="data:,">
+  <title>TuneTwin AI · Music Player</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800;900&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v={{ range(1000, 9999) | random }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='feedback.css') }}?v={{ range(1000, 9999) | random }}">
+  {% if connected %}<script defer src="https://sdk.scdn.co/spotify-player.js"></script>{% endif %}
+  <script defer src="{{ url_for('static', filename='app.js') }}?v={{ range(1000, 9999) | random }}"></script>
 </head>
 <body>
-  <div class="page-shell">
-    <header class="topbar">
-      <a class="brand" href="{{ url_for('home') }}"><span class="brand-mark">♪</span> TuneTwin <span>AI</span></a>
-      <div class="connection">
-        {% if connected %}<span class="status-dot"></span><span>Spotify connected</span>
-        {% else %}<span class="status-dot off"></span><span>Spotify not connected</span>{% endif %}
-        <a class="connect-link" href="{{ url_for('spotify_connect') }}">{% if connected %}Reconnect{% else %}Connect Spotify{% endif %}</a>
+  <!-- SVG Symbols Sprite -->
+  <svg class="sprite" aria-hidden="true">
+    <symbol id="i-logo" viewBox="0 0 24 24"><path d="M4 14v-4M8 18V6M12 15V9M16 20V4M20 13v-2" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></symbol>
+    <symbol id="i-listen" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M10 8.8v6.4l5.2-3.2z" fill="currentColor"/></symbol>
+    <symbol id="i-library" viewBox="0 0 24 24"><path d="M4 5h3v14H4zM9 5h3v14H9zM15 6.2l2.9-.8 3.5 12.7-2.9.8z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+    <symbol id="i-model" viewBox="0 0 24 24"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-heart" viewBox="0 0 24 24"><path d="M12 20s-7.5-4.7-7.5-10A4.5 4.5 0 0 1 12 7a4.5 4.5 0 0 1 7.5 3c0 5.3-7.5 10-7.5 10z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+    <symbol id="i-heart-filled" viewBox="0 0 24 24"><path d="M12 20s-7.5-4.7-7.5-10A4.5 4.5 0 0 1 12 7a4.5 4.5 0 0 1 7.5 3c0 5.3-7.5 10-7.5 10z" fill="currentColor" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l10-6.5z" fill="currentColor"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5h3v14H8zM14 5h3v14h-3z" fill="currentColor"/></symbol>
+    <symbol id="i-next" viewBox="0 0 24 24"><path d="M5 6.5v11l8-5.5zM16 6h2v12h-2z" fill="currentColor"/></symbol>
+    <symbol id="i-prev" viewBox="0 0 24 24"><path d="M19 6.5v11l-8-5.5zM6 6h2v12H6z" fill="currentColor"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M15 15l5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M5 7h14M10 7V5h4v2M7 7l1 13h8l1-13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-note" viewBox="0 0 24 24"><path d="M9 18V6l9-2v12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><circle cx="6.5" cy="18" r="2.5" fill="currentColor"/><circle cx="15.5" cy="16" r="2.5" fill="currentColor"/></symbol>
+    <symbol id="i-spotify" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="#1db954"/><path d="M6.8 9.3c3.5-1 7.5-.7 10.4 1.1M7.4 12.5c2.9-.8 6-.5 8.4 1M8 15.4c2.2-.6 4.4-.4 6.2.8" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11.5A8 8 0 1 0 18 17M20 5v4h-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-queue" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-volume" viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><circle cx="19" cy="12" r="1.6" fill="currentColor"/></symbol>
+    <symbol id="i-back" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-forward" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <!-- Reference UI Icons -->
+    <symbol id="i-disc" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="3" fill="currentColor"/><circle cx="12" cy="12" r="6" fill="none" stroke="currentColor" stroke-width="1"/></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4M8 22h8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-bell" viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 0 1-3.46 0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-mail" viewBox="0 0 24 24"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" fill="none" stroke="currentColor" stroke-width="1.8"/><polyline points="22,6 12,13 2,6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-comment" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+    <symbol id="i-share" viewBox="0 0 24 24"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8M16 6l-4-4-4 4M12 2v13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-wave" viewBox="0 0 24 24"><path d="M2 13h2M6 9v6M10 6v12M14 8v8M18 10v4M22 13h-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+  </svg>
+
+  <!-- Lakeside Wallpaper Backdrop with Pink Foliage & Ambient Orbs -->
+  <div class="wallpaper-backdrop" aria-hidden="true">
+    <div class="wallpaper-landscape"></div>
+    <div class="wallpaper-overlay"></div>
+    <span class="backdrop-orb a"></span>
+    <span class="backdrop-orb b"></span>
+    <span class="backdrop-orb c"></span>
+  </div>
+
+  <!-- Centered Floating Desktop App Window -->
+  <div class="app" id="app">
+    <!-- Left Sidebar -->
+    <aside class="sidebar">
+      <!-- 🔴 🟡 🟢 macOS Window Control Dots -->
+      <div class="window-controls" aria-hidden="true">
+        <span class="win-dot dot-close"></span>
+        <span class="win-dot dot-min"></span>
+        <span class="win-dot dot-max"></span>
       </div>
-    </header>
 
-    <main>
-      <section class="hero">
-        <p class="eyebrow">YOUR NEXT FAVORITE TRACK</p>
-        <h1>Find your song's <span>twin.</span></h1>
-        <p class="intro">Pick a track from the Spotify dataset. TuneTwin compares its sound and artist-genre tags, then finds five close matches with room for new artists.</p>
-        <div class="catalog-note"><strong>{{ "{:,.0f}".format(song_count) }}</strong> tracks · {{ features|length }} audio features · artist-level genre tags</div>
-        <div class="learning-note">LINUCB · {{ bandit_update_count }} feedback updates · Like +2 / Skip −1</div>
-      </section>
+      <!-- Section: RECOMMENDED -->
+      <nav class="side-nav" aria-label="Library">
+        <span class="side-heading">RECOMMENDED</span>
+        <button type="button" class="side-link active" data-view="listen">
+          <svg><use href="#i-note"/></svg><span>Listen now</span>
+        </button>
+        <button type="button" class="side-link" data-view="mixes">
+          <svg><use href="#i-disc"/></svg><span>Mixes</span>
+        </button>
+        <button type="button" class="side-link" data-view="playlists">
+          <svg><use href="#i-library"/></svg><span>Playlists</span>
+        </button>
+        <button type="button" class="side-link" data-view="model">
+          <svg><use href="#i-model"/></svg><span>Model</span>
+        </button>
+      </nav>
 
-      {% with messages = get_flashed_messages(with_categories=true) %}
-        {% if messages %}<section class="messages" aria-live="polite">{% for category, message in messages %}<div class="message {{ category }}">{{ message }}</div>{% endfor %}</section>{% endif %}
-      {% endwith %}
-
-      <section class="search-panel panel">
-        <div class="section-heading"><div><p class="eyebrow">01 / CHOOSE A SEED SONG</p><h2>What are you listening to?</h2></div><span class="step-number">01</span></div>
-        <label class="search-label" for="track-search">Search the local Spotify dataset</label>
-        <div class="search-wrap">
-          <span class="search-icon">⌕</span>
-          <input id="track-search" type="search" placeholder="Try “Often” or “The Weeknd”" autocomplete="off" aria-autocomplete="list" aria-controls="search-results">
-          <div id="search-results" class="search-results" role="listbox"></div>
+      <!-- Section: MY PLAYLIST (10) -->
+      <div class="side-playlists-wrap">
+        <div class="side-block-head">
+          <span>MY PLAYLISTS (<span id="side-playlist-count"></span>)</span>
+          <svg class="chevron-mini"><use href="#i-chevron"/></svg>
         </div>
-        <div id="selected-song" class="selected-song {% if not seed %}hidden{% endif %}">
-          <div><span class="selected-label">SELECTED TRACK</span><strong id="selected-name">{{ seed.name if seed else '' }}</strong><span id="selected-artist">{{ seed.artist if seed else '' }}</span></div>
-          <form action="{{ url_for('recommend_route') }}" method="post">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <input id="selected-index" type="hidden" name="track_index" value="{{ seed.index if seed else '' }}">
-            <button class="button primary" type="submit">Find 5 matches <span>→</span></button>
-          </form>
-        </div>
-        <p class="hint">Recommendations use audio-feature similarity and available artist genre tags. Track IDs in the CSV are not assumed to be Spotify IDs.</p>
-      </section>
+        <div class="side-playlist-items" id="side-playlists"></div>
+        <div id="side-mixes" hidden></div>
+        <span id="side-mix-count" hidden></span>
+      </div>
 
-      {% if seed %}
-      <section class="results-section">
-        <div class="section-heading result-heading"><div><p class="eyebrow">02 / PLAY & DISCOVER</p><h2>Made for <span>{{ seed.name }}</span></h2><p class="muted">by {{ seed.artist }}</p></div><span class="step-number">02</span></div>
-        <article class="seed-card panel">
-          <div class="record-icon">♫</div>
-          <div class="song-info"><span class="selected-label">YOUR SEED TRACK</span><h3>{{ seed.name }}</h3><p>{{ seed.artist }}</p>
-            <div class="tags">{% for genre in seed.genres %}<span class="tag">{{ genre }}</span>{% else %}<span class="tag muted-tag">Genre unavailable</span>{% endfor %}</div>
+      <!-- Bottom Mini Now Playing Card (Left: Title, Artist, Heart, Wave | Right: Thumbnail) -->
+      <div class="sidebar-mini-player" id="side-now-card">
+        <div class="mini-player-copy">
+          <strong id="side-now-title">Nothing playing</strong>
+          <small id="side-now-artist">Pick a song to start</small>
+          <div class="mini-player-actions">
+            <button type="button" class="mini-action-btn" id="side-like-btn" title="Like current song">
+              <svg><use href="#i-heart"/></svg>
+            </button>
+            <span class="mini-wave-indicator" title="Audio streaming">
+              <svg><use href="#i-wave"/></svg>
+            </span>
           </div>
-          <form action="{{ url_for('play_track') }}" method="post">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="row_index" value="{{ seed.index }}"><input type="hidden" name="seed_index" value="{{ seed.index }}">
-            <button class="button outline" type="submit">▶ Play + queue 5</button>
-          </form>
-        </article>
+        </div>
+        <div class="mini-player-cover">
+          <img id="side-now-art" alt="" style="display: none;" crossorigin="anonymous" referrerpolicy="no-referrer">
+          <div class="mini-default-art" aria-hidden="true">
+            <svg viewBox="0 0 40 40" class="mini-art-svg">
+              <rect width="40" height="40" rx="7" fill="#1e3a8a"/>
+              <path d="M 11 13 L 15 9 L 19 13" fill="none" stroke="#60a5fa" stroke-width="2" stroke-linecap="round"/>
+              <path d="M 29 27 L 25 31 L 21 27" fill="none" stroke="#93c5fd" stroke-width="2" stroke-linecap="round"/>
+              <circle cx="28" cy="13" r="2" fill="#ffffff"/>
+              <circle cx="12" cy="27" r="2" fill="#ffffff"/>
+            </svg>
+          </div>
+        </div>
+      </div>
 
-        <div class="recommendation-title"><div><h2>Five songs to try next</h2><p class="muted">Top-50 content pool · LinUCB reranking · adaptive artist variety</p></div><span class="count-pill">5 TRACKS</span></div>
-        <div class="recommendations">
-          {% for rec in recommendations %}
-          <article class="recommendation panel">
-            <div class="rec-index">{{ "%02d"|format(loop.index) }}</div>
-            <div class="song-info">
-              <h3>{{ rec.name }}</h3><p>{{ rec.artist }}</p>
-              <div class="tags">{% for genre in rec.genres %}<span class="tag">{{ genre }}</span>{% else %}<span class="tag muted-tag">Genre unavailable</span>{% endfor %}</div>
-              <div class="match-row"><span class="score-track"><span style="width: {{ (rec.score * 100)|round|int }}%"></span></span><span>{{ (rec.score * 100)|round|int }}% rank</span><span>Content {{ (rec.similarity * 100)|round|int }}%</span><span>LinUCB {{ (rec.bandit_score * 100)|round|int }}%</span>
-                {% if rec.match %}<span class="spotify-match">Spotify match {{ (rec.match.confidence * 100)|round|int }}%</span>{% else %}<span class="spotify-match unavailable">Spotify match unavailable</span>{% endif %}
+      <div hidden id="side-device">{% if connected %}Web player ready{% else %}Connect Spotify{% endif %}</div>
+    </aside>
+
+    <!-- Main Window Area -->
+    <div class="window">
+      <!-- Top Bar -->
+      <header class="topbar">
+        <div class="topbar-left">
+          <div class="history-controls" aria-hidden="true">
+            <button type="button" class="hist-btn" tabindex="-1" title="Back"><svg><use href="#i-back"/></svg></button>
+            <button type="button" class="hist-btn" tabindex="-1" title="Forward"><svg><use href="#i-forward"/></svg></button>
+          </div>
+
+          <!-- Search Pill -->
+          <div class="search-wrap top-search">
+            <form class="search-form" role="search" onsubmit="return false">
+              <svg class="search-icon"><use href="#i-search"/></svg>
+              <input id="track-search" name="q" type="search" placeholder="Search..." autocomplete="off" aria-label="Search songs or artists" aria-autocomplete="list" aria-controls="search-results">
+            </form>
+            <div id="search-results" class="search-results" role="listbox"></div>
+          </div>
+        </div>
+
+        <!-- Center Navigation Tabs -->
+        <nav class="center-tabs" aria-label="Sections">
+          <button type="button" class="nav-tab active" data-view="listen" aria-current="page">Listen now</button>
+          <button type="button" class="nav-tab" data-view="mixes">Mixes</button>
+          <button type="button" class="nav-tab" data-view="playlists">Playlists</button>
+          <button type="button" class="nav-tab" data-view="model">Model</button>
+        </nav>
+
+        <!-- Right Utility Icons & Profile -->
+        <div class="topbar-right">
+          <button type="button" class="top-icon-btn" title="Messages"><svg><use href="#i-mail"/></svg></button>
+          <button type="button" class="top-icon-btn" title="Notifications"><svg><use href="#i-bell"/></svg></button>
+          <a class="profile-chip" href="{{ url_for('spotify_connect') }}" title="{% if connected %}Spotify Connected{% else %}Connect Spotify{% endif %}">
+            <span class="profile-name">Romen</span>
+            <div class="profile-avatar">
+              <img src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=80&auto=format&fit=crop&q=80" alt="Avatar">
+              <span class="status-indicator {% if connected %}online{% endif %}"></span>
+            </div>
+          </a>
+        </div>
+      </header>
+
+      <!-- Main Stage Container -->
+      <main id="main" tabindex="-1">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+          <section class="messages" aria-live="polite">
+            {% for category, message in messages %}<div class="message {{ category }}">{{ message }}</div>{% endfor %}
+          </section>
+          {% endif %}
+        {% endwith %}
+
+        <!-- ===================== VIEW 1: RECOMMEND / PLAYER (EXACT REFERENCE DESIGN) ===================== -->
+        <section id="view-listen" class="view is-active" aria-labelledby="now-title">
+          <div class="hero-now" id="now-hero" aria-label="Now playing">
+            <!-- Background Giant Watermark Typography -->
+            <div class="hero-ghost-wrap" aria-hidden="true">
+              <div class="hero-ghost" id="now-ghost">YOUR MUSIC</div>
+            </div>
+
+            <!-- Stage Header: Title + SQ Badge + Metadata -->
+            <header class="stage-header">
+              <div class="stage-title-row">
+                <h1 class="now-title" id="now-title">Nothing playing</h1>
+                <span class="sq-badge" id="now-kicker" hidden>SQ</span>
+              </div>
+              <div class="stage-artist-row">
+                <span class="meta-label">Artist:</span> <span class="now-artist" id="now-artist">Pick a song to start</span>
+                <span class="meta-separator">&nbsp;&nbsp;&nbsp;&nbsp;</span>
+                <span class="meta-label">Album:</span> <span class="now-album" id="now-album"></span>
+                <span id="now-source" hidden>TuneTwin AI</span>
+                <span id="hero-playing-label" hidden>Ready when you are</span>
+              </div>
+            </header>
+
+            <!-- Center Stage Body: Cover Art + Vinyl with Needle + Lyrics -->
+            <div class="stage-body">
+              <!-- Turntable Cover & Vinyl Unit -->
+              <div class="turntable-unit">
+                <!-- Sliding Vinyl Disc -->
+                <div class="now-vinyl-wrap" aria-hidden="true">
+                  <div class="now-vinyl" id="now-vinyl">
+                    <span class="now-vinyl-label" id="now-vinyl-label">
+                      <span class="vinyl-label-art"></span>
+                    </span>
+                    <span class="vinyl-center-hole"></span>
+                  </div>
+                </div>
+
+                <!-- Square Cover Art -->
+                <div class="now-art-box" id="now-art-box">
+                  <img id="now-art" alt="" style="display: none;" crossorigin="anonymous" referrerpolicy="no-referrer">
+                  <!-- Default Cyberpunk Cover Artwork matching reference screenshot -->
+                  <div class="default-cyberpunk-art" id="default-cover-graphic" aria-hidden="true">
+                    <!-- Left Vertical Tech Typography -->
+                    <div class="cyber-vertical-text">01 // ROTEN SOUND</div>
+                    <!-- Cyberpunk Anime Figure & Shapes SVG -->
+                    <svg viewBox="0 0 210 210" class="cyber-art-svg">
+                      <defs>
+                        <linearGradient id="cyber-bg" x1="0%" y1="0%" x2="100%" y2="100%">
+                          <stop offset="0%" stop-color="#3b1b6d"/>
+                          <stop offset="50%" stop-color="#282270"/>
+                          <stop offset="100%" stop-color="#141c52"/>
+                        </linearGradient>
+                        <radialGradient id="cyber-glow" cx="70%" cy="30%" r="55%">
+                          <stop offset="0%" stop-color="#ff3377" stop-opacity="0.8"/>
+                          <stop offset="100%" stop-color="#282270" stop-opacity="0"/>
+                        </radialGradient>
+                      </defs>
+                      <rect width="210" height="210" fill="url(#cyber-bg)"/>
+                      <rect width="210" height="210" fill="url(#cyber-glow)"/>
+                      <!-- Halftone Grid Lines -->
+                      <g stroke="rgba(255,255,255,0.06)" stroke-width="1">
+                        <line x1="0" y1="40" x2="210" y2="40"/>
+                        <line x1="0" y1="80" x2="210" y2="80"/>
+                        <line x1="0" y1="120" x2="210" y2="120"/>
+                        <line x1="0" y1="160" x2="210" y2="160"/>
+                        <line x1="40" y1="0" x2="40" y2="210"/>
+                        <line x1="80" y1="0" x2="80" y2="210"/>
+                        <line x1="120" y1="0" x2="120" y2="210"/>
+                        <line x1="160" y1="0" x2="160" y2="210"/>
+                      </g>
+                      <!-- Cyber Figure Silhouette -->
+                      <g transform="translate(42, 28)">
+                        <!-- Yellow Spiky Hair -->
+                        <polygon points="40,22 48,6 55,20 64,8 70,24 82,14 78,32 86,28 76,46 52,44" fill="#fde047" opacity="0.95"/>
+                        <!-- Head / Face Silhouette in White & Blue -->
+                        <path d="M 44 32 C 44 26, 74 26, 74 32 L 72 58 C 70 70, 48 70, 46 58 Z" fill="#e2e8f0"/>
+                        <!-- Dark Sunglasses Visor -->
+                        <path d="M 40 42 L 76 42 L 72 52 L 44 52 Z" fill="#0f172a"/>
+                        <rect x="42" y="44" width="30" height="3" fill="#38bdf8"/>
+                        <!-- Cyber Armor / Jacket -->
+                        <path d="M 30 68 L 88 68 L 102 140 L 16 140 Z" fill="#1e1b4b"/>
+                        <path d="M 44 68 L 59 105 L 74 68 Z" fill="#ff2a6d"/>
+                        <path d="M 24 95 L 42 85 L 50 140 L 20 140 Z" fill="#312e81"/>
+                        <path d="M 94 95 L 76 85 L 68 140 L 98 140 Z" fill="#312e81"/>
+                        <!-- Microphone / Headset Hand -->
+                        <path d="M 18 90 L 38 78 L 44 88 L 24 100 Z" fill="#f8fafc"/>
+                        <circle cx="38" cy="78" r="6" fill="#334155"/>
+                        <line x1="38" y1="78" x2="48" y2="58" stroke="#38bdf8" stroke-width="2"/>
+                      </g>
+                    </svg>
+                    <!-- Neon Orange Red Rectangular Overlay Boxes -->
+                    <div class="cyber-red-box a"></div>
+                    <div class="cyber-red-box b"></div>
+                    <!-- Checkered Hazard Diagonal Tape (Bottom Left) -->
+                    <div class="cyber-checker"></div>
+                    <!-- Rotated Badge Text -->
+                    <span class="cyber-badge">ROTEN</span>
+                  </div>
+                </div>
+
+                <!-- Turntable Tonearm Stylus Needle resting on the Vinyl -->
+                <div class="turntable-tonearm" aria-hidden="true">
+                  <svg viewBox="0 0 160 120" class="tonearm-svg">
+                    <circle cx="28" cy="22" r="10" fill="#ffffff" filter="drop-shadow(0 3px 6px rgba(0,0,0,0.6))"/>
+                    <circle cx="28" cy="22" r="3.5" fill="#0a1026"/>
+                    <path d="M 28 22 C 65 22, 105 36, 122 84" fill="none" stroke="#ffffff" stroke-width="3.5" stroke-linecap="round"/>
+                    <circle cx="122" cy="84" r="3.5" fill="#ffffff"/>
+                    <rect x="117" y="80" width="8" height="14" rx="2.5" transform="rotate(-30 117 80)" fill="#ffffff" filter="drop-shadow(0 2px 4px rgba(0,0,0,0.4))"/>
+                  </svg>
+                </div>
+
+                <!-- Track actions under the cover art -->
+                <div class="cover-action-bar">
+                  <button type="button" class="cover-action-btn" id="cover-btn-like" title="Like current song" aria-label="Like current song">
+                    <svg><use href="#i-heart"/></svg>
+                  </button>
+                  <button type="button" class="cover-action-btn" id="cover-btn-folder" title="Playlists">
+                    <svg><use href="#i-folder"/></svg>
+                  </button>
+                  <button type="button" class="cover-action-btn" id="cover-btn-share" title="Open Spotify">
+                    <svg><use href="#i-external"/></svg>
+                  </button>
+                  <button type="button" class="cover-action-btn" id="cover-btn-comment" title="Notes">
+                    <svg><use href="#i-comment"/></svg>
+                  </button>
+                  <button type="button" class="cover-action-btn" id="cover-btn-more" title="More options">
+                    <svg><use href="#i-more"/></svg>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Right Side: The full, playable queue -->
+              <section class="lyrics-unit now-side" id="lyrics-unit" aria-label="Coming up next">
+                <div class="now-side-head">
+                  <div><span class="side-eyebrow">Coming up</span><h2>Up next</h2></div>
+                  <span id="queue-summary">0 tracks</span>
+                </div>
+                <div class="now-queue-toolbar">
+                  <button type="button" class="icon-btn" id="refresh-queue" aria-label="Refresh queue"><svg><use href="#i-refresh"/></svg></button>
+                  <button type="button" class="queue-auto" id="auto-queue-toggle" role="switch" aria-checked="true">
+                    <span class="queue-auto-copy"><strong>Auto queue</strong><span>Fill with model picks</span></span>
+                    <span class="switch" aria-hidden="true"><span></span></span>
+                  </button>
+                </div>
+                <div id="queue-items" class="queue-items now-queue-list"><p class="sub">Play a song to build a queue.</p></div>
+              </section>
+            </div>
+
+            <!-- Bottom Row: Comment & Lately -->
+            <div class="stage-footer-row">
+              <!-- Left Column: Comment -->
+              <div class="comment-column">
+                <h3 class="column-title">Comment</h3>
+                <div class="comment-card">
+                  <div class="comment-avatar">
+                    <img src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=80&auto=format&fit=crop&q=80" alt="Avatar">
+                  </div>
+                  <div class="comment-body">
+                    <strong class="comment-username">jlsFkOLL</strong>
+                    <p class="comment-quote" id="now-comment-text">What a spark shading the backboard scream!</p>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Right Column: Lately -->
+              <div class="lately-column">
+                <h3 class="column-title">Lately</h3>
+                <div class="lately-avatars-row" id="lately-avatars">
+                  <span class="lately-avatar" title="Recent Listener 1"><img src="https://images.unsplash.com/photo-1517841905240-472988babdf9?w=80&auto=format&fit=crop&q=80" alt="avatar"></span>
+                  <span class="lately-avatar" title="Recent Listener 2"><img src="https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=80&auto=format&fit=crop&q=80" alt="avatar"></span>
+                  <span class="lately-avatar" title="Recent Listener 3"><img src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=80&auto=format&fit=crop&q=80" alt="avatar"></span>
+                  <span class="lately-avatar" title="Recent Listener 4"><img src="https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=80&auto=format&fit=crop&q=80" alt="avatar"></span>
+                  <span class="lately-avatar" title="Recent Listener 5"><img src="https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=80&auto=format&fit=crop&q=80" alt="avatar"></span>
+                </div>
               </div>
             </div>
-            <div class="rec-actions">
-              {% if rec.match and rec.match.url %}<a class="icon-button" href="{{ rec.match.url }}" target="_blank" rel="noopener noreferrer" aria-label="Open {{ rec.name }} on Spotify">↗</a>{% endif %}
-              <form action="{{ url_for('play_track') }}" method="post">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="row_index" value="{{ rec.index }}"><input type="hidden" name="seed_index" value="{{ seed.index }}">
-                <button class="button play-button" type="submit" aria-label="Play {{ rec.name }} and queue following recommendations">▶ Play + queue</button>
-              </form>
-              <form class="feedback-form" action="{{ url_for('record_feedback') }}" method="post">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="row_index" value="{{ rec.index }}"><input type="hidden" name="seed_index" value="{{ seed.index }}">
-                <button class="button feedback-like" type="submit" name="feedback" value="like" aria-label="Like {{ rec.name }} for TuneTwin">Like +2</button>
-                <button class="button feedback-skip" type="submit" name="feedback" value="skip" aria-label="Skip {{ rec.name }} for TuneTwin">Skip −1</button>
-              </form>
-            </div>
-          </article>
-          {% endfor %}
-        </div>
-        <p class="disclaimer">Like and Skip are explicit TuneTwin feedback; the app updates its local LinUCB model and does not save Likes to Spotify. Skipping a recommendation advances Spotify only if that exact song is currently playing. Queue actions append matches to Spotify's existing queue. Genres come from artist-level tags and are not verified track genres.</p>
-      </section>
-      {% endif %}
-    </main>
+          </div>
+        </section>
 
-    <footer><span>TuneTwin AI</span><span>Local Flask prototype · Spotify playback requires an authorized account and active device</span></footer>
+        <!-- ===================== VIEW 2: TOP CHARTS / MIXES ===================== -->
+        <section id="view-mixes" class="view" aria-labelledby="mixes-view-title">
+          <div class="page-head">
+            <h2 id="mixes-view-title">Top Charts &amp; Mixes</h2>
+            <p>Seeded by listening history and audio profile similarity across {{ "{:,.0f}".format(song_count) }} tracks.</p>
+          </div>
+          <div class="section-head">
+            <div><span class="sub">Refreshed with your Like &amp; Skip feedback</span></div>
+            <button type="button" class="btn small" id="refresh-mixes"><svg><use href="#i-refresh"/></svg>Refresh mixes</button>
+          </div>
+          <p id="mixes-status" class="status" aria-live="polite"></p>
+          <div id="mood-mixes" class="playlist-grid" aria-live="polite"></div>
+          <div id="playlists-empty" class="empty hidden">
+            <div class="empty-icon"><svg><use href="#i-library"/></svg></div>
+            <h3>No mixes available</h3>
+            <p>Try refreshing the mixes from your catalog.</p>
+          </div>
+        </section>
+
+        <!-- ===================== VIEW 3: GENRES / PLAYLISTS ===================== -->
+        <section id="view-playlists" class="view" aria-labelledby="playlists-view-title">
+          <div class="page-head">
+            <h2 id="playlists-view-title">Your Playlists</h2>
+            <p>Loaded from Spotify with automated model recommendations ready to explore.</p>
+          </div>
+          <div class="section-head">
+            <div><span class="sub">Model picks available for every list</span></div>
+            <button type="button" class="btn small" id="refresh-playlists"><svg><use href="#i-refresh"/></svg>Refresh</button>
+          </div>
+          <p id="playlists-status" class="status" aria-live="polite"></p>
+          <div id="playlist-grid" class="playlist-grid" aria-live="polite"></div>
+        </section>
+
+        <!-- ===================== VIEW 4: MODEL STATS ===================== -->
+        <section id="view-model" class="view" aria-labelledby="model-title">
+          <div class="page-head">
+            <h1 id="model-title">Model Architecture</h1>
+            <p>Audio features feed PCA and K-Means; a KNN preference model and LinUCB bandit rerank the candidate pool.</p>
+          </div>
+          <div class="metrics-grid">
+            <div class="metric"><span>Selected</span><strong style="font-size:16px">Gradient Boosting</strong><small>highest held-out F1</small></div>
+            <div class="metric"><span>Catalogue</span><strong>{{ "{:,.0f}".format(song_count) }}</strong><small>tracks</small></div>
+            <div class="metric"><span>PCA</span><strong>{{ pca_components }}</strong><small>components</small></div>
+            <div class="metric"><span>K-Means</span><strong>{{ selected_k }}</strong><small>clusters</small></div>
+            <div class="metric"><span>Silhouette</span><strong>{{ (best_silhouette * 100)|round|int }}%</strong><small>cluster separation</small></div>
+            <div class="metric"><span>F1 (test)</span><strong>0.820</strong><small>held-out</small></div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Model</th><th>Accuracy</th><th>Precision</th><th>Recall</th><th>F1</th><th>ROC-AUC</th></tr></thead>
+              <tbody>
+                <tr class="selected"><td>Gradient Boosting <span class="best">selected</span></td><td class="num">0.713</td><td class="num">0.727</td><td class="num">0.940</td><td class="num">0.820</td><td class="num">0.625</td></tr>
+                <tr><td>KNN</td><td class="num">0.685</td><td class="num">0.718</td><td class="num">0.903</td><td class="num">0.799</td><td class="num">0.642</td></tr>
+                <tr><td>Random Forest</td><td class="num">0.657</td><td class="num">0.739</td><td class="num">0.785</td><td class="num">0.761</td><td class="num">0.620</td></tr>
+                <tr><td>Logistic Regression</td><td class="num">0.663</td><td class="num">0.783</td><td class="num">0.713</td><td class="num">0.747</td><td class="num">0.661</td></tr>
+                <tr><td>Decision Tree</td><td class="num">0.631</td><td class="num">0.725</td><td class="num">0.756</td><td class="num">0.741</td><td class="num">0.500</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="feature-pills" style="margin-top: 18px;">
+            <ul class="feature-list">
+              {% for feature in features %}<li class="tag">{{ feature }}</li>{% endfor %}
+            </ul>
+          </div>
+        </section>
+
+        <!-- Playlist Detail Panel -->
+        <section class="section detail-panel" id="detail-panel" hidden aria-live="polite">
+          <div class="section-head">
+            <div>
+              <h2 id="detail-title">Mix</h2>
+              <span class="sub" id="detail-meta"></span>
+            </div>
+            <div class="detail-actions">
+              <button type="button" class="btn primary" id="detail-play-primary">Play mix</button>
+              <button type="button" class="btn" id="detail-play-secondary" hidden>Play recommendations</button>
+              <form id="detail-export" action="{{ url_for('create_mood_playlist') }}" method="post" hidden>
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="mood" id="detail-mood" value="">
+                <button type="submit" class="btn"><svg><use href="#i-spotify"/></svg>Export</button>
+              </form>
+              <button type="button" class="btn small" id="detail-close">Close</button>
+            </div>
+          </div>
+          <div class="detail-hero" id="detail-hero" hidden>
+            <img id="detail-hero-art" alt="" decoding="async" referrerpolicy="no-referrer">
+            <span id="detail-hero-label"></span>
+          </div>
+          <p id="detail-desc" class="sub"></p>
+          <p id="detail-status" class="status" aria-live="polite"></p>
+          <div class="detail-list">
+            <div class="section-head"><h3 id="detail-primary-title">Tracks</h3><span class="sub" id="detail-primary-count"></span></div>
+            <div class="rows" id="detail-primary"></div>
+          </div>
+          <div class="detail-list" id="detail-secondary-wrap" hidden>
+            <div class="section-head"><h3 id="detail-secondary-title">Model recommendations</h3><span class="sub" id="detail-secondary-count"></span></div>
+            <div class="rows" id="detail-secondary"></div>
+          </div>
+        </section>
+      </main>
+
+      <!-- ===================== BOTTOM PLAYER BAR ===================== -->
+      <footer class="player" id="player-panel" data-csrf="{{ csrf_token() }}" data-connected="{{ 'true' if connected else 'false' }}" aria-label="Now playing">
+        <!-- Left: Playback Controls (Prev, Big Round Play, Next) -->
+        <div class="player-left-controls">
+          <button type="button" class="player-ctrl-btn" id="previous-track" aria-label="Previous track">
+            <svg><use href="#i-prev"/></svg>
+          </button>
+          <button type="button" class="player-play-btn" id="toggle-play" aria-label="Play or pause">
+            <svg><use href="#i-play"/></svg>
+          </button>
+          <button type="button" class="player-ctrl-btn" id="next-track" aria-label="Skip track">
+            <svg><use href="#i-next"/></svg>
+          </button>
+        </div>
+
+        <!-- Center: Current Time, Glowing Range Slider, Duration -->
+        <div class="player-center-track">
+          <span class="track-time" id="current-time">0:00</span>
+          <div class="track-slider-box">
+            <input id="progress" type="range" min="0" max="1000" value="0" aria-label="Playback position">
+          </div>
+          <span class="track-time" id="duration">0:00</span>
+        </div>
+
+        <!-- Right: Volume, Shuffle, Queue -->
+        <div class="player-right-actions">
+          <button type="button" class="player-action-btn" id="volume-toggle" aria-label="Volume">
+            <svg><use href="#i-volume"/></svg>
+          </button>
+          <button type="button" class="player-action-btn" id="shuffle-toggle" aria-label="Shuffle">
+            <svg><use href="#i-refresh"/></svg>
+          </button>
+        </div>
+
+        <!-- Full Compatibility Container for app.js (Zero functional errors) -->
+        <div class="app-compatibility-shim" hidden aria-hidden="true">
+          <div class="player-art">
+            <div class="vinyl-disc"><img id="player-art" alt=""></div>
+            <span class="vinyl-spindle"></span>
+          </div>
+          <strong id="player-title"></strong>
+          <span id="player-artist"></span>
+          <span id="player-status"></span>
+          <span id="player-feedback-status"></span>
+          <button type="button" id="like-current-track"></button>
+          <button type="button" id="repeat-toggle"></button>
+          <span id="shuffle-label"></span>
+          <span id="repeat-label"></span>
+          <input id="now-progress" type="range" min="0" max="1000" value="0">
+          <span id="now-current-time">0:00</span>
+          <span id="now-duration">0:00</span>
+          <button type="button" id="now-toggle-play"></button>
+          <button type="button" id="now-prev"></button>
+          <button type="button" id="now-next"></button>
+          <button type="button" id="now-like"></button>
+          <input id="volume" type="range" min="0" max="100" value="50">
+        </div>
+      </footer>
+    </div>
+
   </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
 </body>
 </html>

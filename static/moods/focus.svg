@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" preserveAspectRatio="xMidYMid slice" role="img" aria-label="Deep indigo rings for focus">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#050818"/>
+      <stop offset="0.55" stop-color="#0c1330"/>
+      <stop offset="1" stop-color="#1d1740"/>
+    </linearGradient>
+    <radialGradient id="orb" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#cdd8ff" stop-opacity="0.95"/>
+      <stop offset="0.4" stop-color="#7d8cff" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#4d5cff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#9fb0ff" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#5a6bff" stop-opacity="0.06"/>
+    </linearGradient>
+    <filter id="grain">
+      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" stitchTiles="stitch"/>
+      <feColorMatrix type="saturate" values="0"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.06"/></feComponentTransfer>
+    </filter>
+  </defs>
+  <rect width="1200" height="800" fill="url(#bg)"/>
+  <g stroke="#8d9cff" stroke-width="1" opacity="0.14">
+    <path d="M0 200 H1200"/><path d="M0 400 H1200"/><path d="M0 600 H1200"/>
+    <path d="M200 0 V800"/><path d="M400 0 V800"/><path d="M600 0 V800"/><path d="M800 0 V800"/><path d="M1000 0 V800"/>
+  </g>
+  <circle cx="790" cy="360" r="330" fill="url(#orb)"/>
+  <circle cx="790" cy="360" r="240" fill="none" stroke="url(#ring)" stroke-width="1.5"/>
+  <circle cx="790" cy="360" r="180" fill="none" stroke="url(#ring)" stroke-width="2"/>
+  <circle cx="790" cy="360" r="120" fill="none" stroke="#dbe2ff" stroke-width="1.4" opacity="0.55"/>
+  <circle cx="790" cy="360" r="62" fill="#e7ebff" opacity="0.9"/>
+  <circle cx="790" cy="360" r="62" fill="none" stroke="#ffffff" stroke-width="1" opacity="0.5"/>
+  <g fill="#c7d0ff" opacity="0.8">
+    <circle cx="180" cy="140" r="2"/>
+    <circle cx="320" cy="640" r="2.4"/>
+    <circle cx="520" cy="180" r="1.6"/>
+    <circle cx="1080" cy="180" r="2.2"/>
+    <circle cx="980" cy="660" r="1.8"/>
+    <circle cx="120" cy="460" r="1.5"/>
+    <circle cx="660" cy="720" r="2"/>
+  </g>
+  <path d="M0 690 C 260 610 420 720 640 660 C 860 600 1030 690 1200 620" fill="none" stroke="#6f7dff" stroke-width="1.4" opacity="0.28"/>
+  <path d="M0 728 C 260 648 430 758 650 698 C 870 638 1040 728 1200 658" fill="none" stroke="#6f7dff" stroke-width="1.2" opacity="0.18"/>
+  <rect width="1200" height="800" filter="url(#grain)" opacity="0.6"/>
+</svg>

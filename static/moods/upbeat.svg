@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" preserveAspectRatio="xMidYMid slice" role="img" aria-label="Warm sunrise with coral ribbons">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3a0f26"/>
+      <stop offset="0.5" stop-color="#a52a35"/>
+      <stop offset="1" stop-color="#f2a641"/>
+    </linearGradient>
+    <radialGradient id="sun" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#fff6dc"/>
+      <stop offset="0.62" stop-color="#ffd98c"/>
+      <stop offset="1" stop-color="#ff9a4d" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="ribbon" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffd7a1" stop-opacity="0.95"/>
+      <stop offset="1" stop-color="#ff6b5e" stop-opacity="0.1"/>
+    </linearGradient>
+    <linearGradient id="ribbon2" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ff8a5c" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#ffd9a8" stop-opacity="0.12"/>
+    </linearGradient>
+    <filter id="grain">
+      <feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="3" stitchTiles="stitch"/>
+      <feColorMatrix type="saturate" values="0"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.06"/></feComponentTransfer>
+    </filter>
+  </defs>
+  <rect width="1200" height="800" fill="url(#bg)"/>
+  <circle cx="820" cy="270" r="300" fill="url(#sun)"/>
+  <circle cx="820" cy="270" r="118" fill="#fff0c8" opacity="0.95"/>
+  <path d="M-40 620 C 230 430 470 700 720 500 C 940 322 1080 430 1260 300" fill="none" stroke="url(#ribbon)" stroke-width="26" stroke-linecap="round" opacity="0.8"/>
+  <path d="M-60 740 C 220 560 470 810 760 610 C 970 468 1110 560 1280 430" fill="none" stroke="url(#ribbon2)" stroke-width="14" stroke-linecap="round" opacity="0.75"/>
+  <path d="M-20 480 C 190 340 400 520 600 380 C 760 270 930 330 1120 210" fill="none" stroke="#ffcf9b" stroke-width="6" stroke-linecap="round" opacity="0.55"/>
+  <g opacity="0.85">
+    <circle cx="240" cy="220" r="12" fill="#ffdfae"/>
+    <circle cx="330" cy="330" r="7" fill="#ffb185"/>
+    <circle cx="470" cy="170" r="9" fill="#ffe6bb"/>
+    <circle cx="600" cy="300" r="5" fill="#ffc39a"/>
+    <circle cx="1010" cy="520" r="10" fill="#ffd59c"/>
+    <circle cx="1110" cy="620" r="6" fill="#ff9f7c"/>
+    <circle cx="140" cy="560" r="8" fill="#ffbe8e"/>
+  </g>
+  <g stroke="#ffe2b8" stroke-width="2" opacity="0.35" transform="rotate(-24 820 270)">
+    <path d="M820 20 v90"/><path d="M820 430 v90"/><path d="M570 270 h90"/><path d="M980 270 h90"/>
+    <path d="M640 90 l64 64"/><path d="M936 386 l64 64"/><path d="M1000 90 l-64 64"/><path d="M704 386 l-64 64"/>
+  </g>
+  <rect width="1200" height="800" filter="url(#grain)" opacity="0.6"/>
+</svg>
