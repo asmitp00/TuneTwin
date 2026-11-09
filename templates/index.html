@@ -78,12 +78,6 @@
         <button type="button" class="side-link active" data-view="listen">
           <svg><use href="#i-note"/></svg><span>Listen now</span>
         </button>
-        <button type="button" class="side-link" data-view="mixes">
-          <svg><use href="#i-disc"/></svg><span>Mixes</span>
-        </button>
-        <button type="button" class="side-link" data-view="playlists">
-          <svg><use href="#i-library"/></svg><span>Playlists</span>
-        </button>
         <button type="button" class="side-link" data-view="model">
           <svg><use href="#i-model"/></svg><span>Model</span>
         </button>
@@ -145,7 +139,7 @@
           <div class="search-wrap top-search">
             <form class="search-form" role="search" onsubmit="return false">
               <svg class="search-icon"><use href="#i-search"/></svg>
-              <input id="track-search" name="q" type="search" placeholder="Search..." autocomplete="off" aria-label="Search songs or artists" aria-autocomplete="list" aria-controls="search-results">
+              <input id="track-search" name="q" type="search" placeholder="Search songs or artists" autocomplete="off" aria-label="Search songs or artists" aria-autocomplete="list" aria-controls="search-results">
             </form>
             <div id="search-results" class="search-results" role="listbox"></div>
           </div>
@@ -159,16 +153,15 @@
           <button type="button" class="nav-tab" data-view="model">Model</button>
         </nav>
 
-        <!-- Right Utility Icons & Profile -->
+        <!-- Spotify connection and TuneTwin profile -->
         <div class="topbar-right">
-          <button type="button" class="top-icon-btn" title="Messages"><svg><use href="#i-mail"/></svg></button>
-          <button type="button" class="top-icon-btn" title="Notifications"><svg><use href="#i-bell"/></svg></button>
-          <a class="profile-chip" href="{{ url_for('spotify_connect') }}" title="{% if connected %}Spotify Connected{% else %}Connect Spotify{% endif %}">
-            <span class="profile-name">Romen</span>
-            <div class="profile-avatar">
-              <img src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=80&auto=format&fit=crop&q=80" alt="Avatar">
-              <span class="status-indicator {% if connected %}online{% endif %}"></span>
-            </div>
+          <span class="spotify-status" aria-label="{% if connected %}Spotify connected{% else %}Spotify not connected{% endif %}">
+            <span class="spotify-status-dot {% if connected %}online{% endif %}"></span>
+            <svg><use href="#i-spotify"/></svg>
+            <span>Spotify</span>
+          </span>
+          <a class="profile-chip" href="{{ url_for('spotify_connect') }}" title="{% if connected %}Spotify Connected{% else %}Connect Spotify{% endif %}" aria-label="TuneTwin profile and Spotify connection">
+            <span class="profile-avatar profile-initials" aria-hidden="true">TT</span>
           </a>
         </div>
       </header>
@@ -198,9 +191,8 @@
                 <span class="sq-badge" id="now-kicker" hidden>SQ</span>
               </div>
               <div class="stage-artist-row">
-                <span class="meta-label">Artist:</span> <span class="now-artist" id="now-artist">Pick a song to start</span>
-                <span class="meta-separator">&nbsp;&nbsp;&nbsp;&nbsp;</span>
-                <span class="meta-label">Album:</span> <span class="now-album" id="now-album"></span>
+                <span class="track-meta-group" id="artist-meta"><span class="meta-label">Artist:</span><span class="now-artist" id="now-artist">Pick a song to start</span></span>
+                <span class="track-meta-group" id="album-meta" hidden><span class="meta-label">Album:</span><span class="now-album" id="now-album"></span></span>
                 <span id="now-source" hidden>TuneTwin AI</span>
                 <span id="hero-playing-label" hidden>Ready when you are</span>
               </div>
@@ -223,7 +215,7 @@
                 <!-- Square Cover Art -->
                 <div class="now-art-box" id="now-art-box">
                   <img id="now-art" alt="" style="display: none;" crossorigin="anonymous" referrerpolicy="no-referrer">
-                  <!-- Default Cyberpunk Cover Artwork matching reference screenshot -->
+                  <!-- Neutral cover placeholder shown until a track is playing -->
                   <div class="default-cyberpunk-art" id="default-cover-graphic" aria-hidden="true">
                     <!-- Left Vertical Tech Typography -->
                     <div class="cyber-vertical-text">01 // ROTEN SOUND</div>
@@ -305,12 +297,6 @@
                   <button type="button" class="cover-action-btn" id="cover-btn-share" title="Open Spotify">
                     <svg><use href="#i-external"/></svg>
                   </button>
-                  <button type="button" class="cover-action-btn" id="cover-btn-comment" title="Notes">
-                    <svg><use href="#i-comment"/></svg>
-                  </button>
-                  <button type="button" class="cover-action-btn" id="cover-btn-more" title="More options">
-                    <svg><use href="#i-more"/></svg>
-                  </button>
                 </div>
               </div>
 
@@ -360,39 +346,35 @@
               </div>
             </div>
           </div>
-        </section>
 
-        <!-- ===================== VIEW 2: TOP CHARTS / MIXES ===================== -->
-        <section id="view-mixes" class="view" aria-labelledby="mixes-view-title">
-          <div class="page-head">
-            <h2 id="mixes-view-title">Top Charts &amp; Mixes</h2>
-            <p>Seeded by listening history and audio profile similarity across {{ "{:,.0f}".format(song_count) }} tracks.</p>
-          </div>
-          <div class="section-head">
-            <div><span class="sub">Refreshed with your Like &amp; Skip feedback</span></div>
-            <button type="button" class="btn small" id="refresh-mixes"><svg><use href="#i-refresh"/></svg>Refresh mixes</button>
-          </div>
-          <p id="mixes-status" class="status" aria-live="polite"></p>
-          <div id="mood-mixes" class="playlist-grid" aria-live="polite"></div>
-          <div id="playlists-empty" class="empty hidden">
-            <div class="empty-icon"><svg><use href="#i-library"/></svg></div>
-            <h3>No mixes available</h3>
-            <p>Try refreshing the mixes from your catalog.</p>
-          </div>
-        </section>
+          <section id="mixes-section" class="mixes-section content-section" aria-labelledby="mixes-view-title">
+            <div class="section-head">
+              <div>
+                <h2 id="mixes-view-title">Your mixes</h2>
+                <span class="sub">Seeded by your recent listening · shaped by mood</span>
+              </div>
+              <button type="button" class="btn small" id="refresh-mixes"><svg><use href="#i-refresh"/></svg>Refresh mixes</button>
+            </div>
+            <p id="mixes-status" class="status" aria-live="polite"></p>
+            <div id="mood-mixes" class="playlist-grid" aria-live="polite"></div>
+            <div id="playlists-empty" class="empty hidden">
+              <div class="empty-icon"><svg><use href="#i-library"/></svg></div>
+              <h3>No mixes available</h3>
+              <p>Try refreshing the mixes from your catalog.</p>
+            </div>
+          </section>
 
-        <!-- ===================== VIEW 3: GENRES / PLAYLISTS ===================== -->
-        <section id="view-playlists" class="view" aria-labelledby="playlists-view-title">
-          <div class="page-head">
-            <h2 id="playlists-view-title">Your Playlists</h2>
-            <p>Loaded from Spotify with automated model recommendations ready to explore.</p>
-          </div>
-          <div class="section-head">
-            <div><span class="sub">Model picks available for every list</span></div>
-            <button type="button" class="btn small" id="refresh-playlists"><svg><use href="#i-refresh"/></svg>Refresh</button>
-          </div>
-          <p id="playlists-status" class="status" aria-live="polite"></p>
-          <div id="playlist-grid" class="playlist-grid" aria-live="polite"></div>
+          <section id="playlists-section" class="playlists-section content-section" aria-labelledby="playlists-view-title">
+            <div class="section-head">
+              <div>
+                <h2 id="playlists-view-title">Your playlists</h2>
+                <span class="sub">Your Spotify playlists, with model picks ready to add</span>
+              </div>
+              <button type="button" class="btn small" id="refresh-playlists"><svg><use href="#i-refresh"/></svg>Refresh</button>
+            </div>
+            <p id="playlists-status" class="status" aria-live="polite"></p>
+            <div id="playlist-grid" class="playlist-grid" aria-live="polite"></div>
+          </section>
         </section>
 
         <!-- ===================== VIEW 4: MODEL STATS ===================== -->
@@ -402,22 +384,23 @@
             <p>Audio features feed PCA and K-Means; a KNN preference model and LinUCB bandit rerank the candidate pool.</p>
           </div>
           <div class="metrics-grid">
-            <div class="metric"><span>Selected</span><strong style="font-size:16px">Gradient Boosting</strong><small>highest held-out F1</small></div>
+            <div class="metric"><span>Selected</span><strong style="font-size:16px">KNN</strong><small>highest held-out F1</small></div>
             <div class="metric"><span>Catalogue</span><strong>{{ "{:,.0f}".format(song_count) }}</strong><small>tracks</small></div>
             <div class="metric"><span>PCA</span><strong>{{ pca_components }}</strong><small>components</small></div>
             <div class="metric"><span>K-Means</span><strong>{{ selected_k }}</strong><small>clusters</small></div>
             <div class="metric"><span>Silhouette</span><strong>{{ (best_silhouette * 100)|round|int }}%</strong><small>cluster separation</small></div>
-            <div class="metric"><span>F1 (test)</span><strong>0.820</strong><small>held-out</small></div>
+            <div class="metric"><span>F1 (test)</span><strong>0.858</strong><small>held-out</small></div>
           </div>
           <div class="table-wrap">
             <table>
               <thead><tr><th>Model</th><th>Accuracy</th><th>Precision</th><th>Recall</th><th>F1</th><th>ROC-AUC</th></tr></thead>
               <tbody>
-                <tr class="selected"><td>Gradient Boosting <span class="best">selected</span></td><td class="num">0.713</td><td class="num">0.727</td><td class="num">0.940</td><td class="num">0.820</td><td class="num">0.625</td></tr>
-                <tr><td>KNN</td><td class="num">0.685</td><td class="num">0.718</td><td class="num">0.903</td><td class="num">0.799</td><td class="num">0.642</td></tr>
-                <tr><td>Random Forest</td><td class="num">0.657</td><td class="num">0.739</td><td class="num">0.785</td><td class="num">0.761</td><td class="num">0.620</td></tr>
-                <tr><td>Logistic Regression</td><td class="num">0.663</td><td class="num">0.783</td><td class="num">0.713</td><td class="num">0.747</td><td class="num">0.661</td></tr>
-                <tr><td>Decision Tree</td><td class="num">0.631</td><td class="num">0.725</td><td class="num">0.756</td><td class="num">0.741</td><td class="num">0.500</td></tr>
+                <tr class="selected"><td>KNN <span class="best">selected</span></td><td class="num">0.761</td><td class="num">0.768</td><td class="num">0.973</td><td class="num">0.858</td><td class="num">0.606</td></tr>
+                <tr><td>Random Forest</td><td class="num">0.745</td><td class="num">0.752</td><td class="num">0.981</td><td class="num">0.852</td><td class="num">0.639</td></tr>
+                <tr><td>Gradient Boosting</td><td class="num">0.741</td><td class="num">0.752</td><td class="num">0.973</td><td class="num">0.848</td><td class="num">0.619</td></tr>
+                <tr><td>Voting Ensemble</td><td class="num">0.741</td><td class="num">0.755</td><td class="num">0.965</td><td class="num">0.847</td><td class="num">0.639</td></tr>
+                <tr><td>Logistic Regression</td><td class="num">0.711</td><td class="num">0.791</td><td class="num">0.832</td><td class="num">0.811</td><td class="num">0.607</td></tr>
+                <tr><td>Decision Tree</td><td class="num">0.620</td><td class="num">0.751</td><td class="num">0.733</td><td class="num">0.742</td><td class="num">0.511</td></tr>
               </tbody>
             </table>
           </div>

@@ -17,6 +17,7 @@ from functools import lru_cache
 from pathlib import Path
 from datetime import datetime, timezone
 
+import joblib
 import numpy as np
 import pandas as pd
 import spotipy
@@ -42,15 +43,22 @@ REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:8888/callback
 SCOPES = "user-read-playback-state user-modify-playback-state streaming user-read-currently-playing user-read-recently-played user-read-email user-read-private playlist-read-private playlist-modify-private playlist-modify-public"
 PLAYBACK_SCOPES = {"user-read-playback-state", "user-modify-playback-state", "user-read-currently-playing", "streaming", "user-read-email", "user-read-private"}
 LINUCB_PATH = ROOT / "models" / "linucb_live.json"
+RECOMMENDER_ARTIFACT_PATH = ROOT / "models" / "tunetwin_recommender.joblib"
 LINUCB_ALPHA = 0.20
 LINUCB_BLEND = 0.25
+CLASSIFIER_BLEND = 0.25
+MIN_CLASSIFIER_EVENTS = 2
 PCA_VARIANCE_TARGET = 0.90
 KMEANS_SEED = 42
 MAX_TRACKS_PER_ARTIST = 3
 MIN_DISTINCT_LEAD_ARTISTS = 3
-FEATURE_CANDIDATES = [
+BASE_FEATURE_CANDIDATES = [
     "valence", "acousticness", "danceability", "duration_ms", "energy",
     "instrumentalness", "liveness", "loudness", "speechiness", "tempo",
+]
+DERIVED_FEATURE_ORDER = [
+    "energy_valence", "dance_energy", "acoustic_instrumental",
+    "tempo_deviation", "log_duration",
 ]
 
 app = Flask(__name__)
@@ -119,7 +127,45 @@ def normalize_artist_name(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", artist)
 
 
-def load_catalog() -> tuple[pd.DataFrame, list[str], np.ndarray, np.ndarray]:
+def load_recommender_artifact() -> dict | None:
+    """Load the notebook-trained preprocessing, PCA/K-Means and classifier."""
+    try:
+        artifact = joblib.load(RECOMMENDER_ARTIFACT_PATH)
+    except FileNotFoundError:
+        logging.warning("Recommender artifact not found at %s; using the built-in fallback pipeline.", RECOMMENDER_ARTIFACT_PATH)
+        return None
+    except Exception as exc:
+        logging.warning("Could not load recommender artifact (%s); using the fallback pipeline.", type(exc).__name__)
+        return None
+    required = {
+        "base_features", "feature_order", "feature_min", "feature_max",
+        "clip_lower", "clip_upper", "imputer", "scaler", "pca", "kmeans",
+        "classifier", "classifier_features",
+    }
+    missing = sorted(required.difference(artifact))
+    if missing:
+        logging.warning("Recommender artifact is missing %s; using the fallback pipeline.", ", ".join(missing))
+        return None
+    return artifact
+
+
+def add_derived_features(frame: pd.DataFrame) -> pd.DataFrame:
+    """Create the same interaction features used by the tuning notebook."""
+    out = frame.copy()
+    if {"energy", "valence"}.issubset(out.columns):
+        out["energy_valence"] = out["energy"] * out["valence"]
+    if {"danceability", "energy"}.issubset(out.columns):
+        out["dance_energy"] = out["danceability"] * out["energy"]
+    if {"acousticness", "instrumentalness"}.issubset(out.columns):
+        out["acoustic_instrumental"] = out["acousticness"] * out["instrumentalness"]
+    if "tempo" in out.columns:
+        out["tempo_deviation"] = (out["tempo"] - out["tempo"].median()).abs()
+    if "duration_ms" in out.columns:
+        out["log_duration"] = np.log1p(out["duration_ms"].clip(lower=0))
+    return out
+
+
+def load_catalog() -> tuple[pd.DataFrame, list[str], np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     if not DATA_PATH.exists():
         raise FileNotFoundError(f"Dataset not found: {DATA_PATH}")
     tracks = pd.read_csv(DATA_PATH, low_memory=False)
@@ -127,7 +173,15 @@ def load_catalog() -> tuple[pd.DataFrame, list[str], np.ndarray, np.ndarray]:
     artist_col = next((c for c in ("artists", "artist", "artist_name") if c in tracks.columns), None)
     if not name_col or not artist_col:
         raise ValueError("The track CSV needs a track name column and an artist column.")
-    feature_cols = [c for c in FEATURE_CANDIDATES if c in tracks.columns]
+
+    artifact = RECOMMENDER_ARTIFACT
+    if artifact:
+        feature_cols = [c for c in artifact["base_features"] if c in tracks.columns]
+        missing = sorted(set(artifact["base_features"]).difference(tracks.columns))
+        if missing:
+            raise ValueError(f"Dataset is missing artifact feature columns: {', '.join(missing)}")
+    else:
+        feature_cols = [c for c in BASE_FEATURE_CANDIDATES if c in tracks.columns]
     if not feature_cols:
         raise ValueError("The track CSV has none of the supported audio feature columns.")
 
@@ -162,13 +216,63 @@ def load_catalog() -> tuple[pd.DataFrame, list[str], np.ndarray, np.ndarray]:
 
     numeric = tracks[feature_cols].apply(pd.to_numeric, errors="coerce")
     numeric = numeric.replace([np.inf, -np.inf], np.nan)
-    numeric = numeric.fillna(numeric.median()).fillna(0.0)
-    scaled = StandardScaler().fit_transform(numeric).astype(np.float32)
-    return tracks, feature_cols, normalize(scaled, norm="l2").astype(np.float32), scaled
+    if artifact:
+        lower = pd.Series(artifact["clip_lower"], index=artifact["base_features"])
+        upper = pd.Series(artifact["clip_upper"], index=artifact["base_features"])
+        numeric = numeric.clip(lower=lower, upper=upper, axis="columns")
+        imputed = pd.DataFrame(
+            artifact["imputer"].transform(numeric),
+            columns=artifact["base_features"],
+            index=tracks.index,
+        )
+    else:
+        imputed = numeric.fillna(numeric.median()).fillna(0.0)
+        imputed = pd.DataFrame(imputed, columns=feature_cols, index=tracks.index)
+    imputed = add_derived_features(imputed)
+    if artifact:
+        feature_order = list(artifact["feature_order"])
+        imputed = imputed.reindex(columns=feature_order)
+        scaler = artifact["scaler"]
+    else:
+        feature_order = list(imputed.columns)
+        scaler = StandardScaler()
+    matrix = imputed.to_numpy(dtype=float)
+    if artifact:
+        scaled = scaler.transform(matrix).astype(np.float32)
+        feature_min = np.asarray(artifact["feature_min"], dtype=np.float32)
+        feature_max = np.asarray(artifact["feature_max"], dtype=np.float32)
+    else:
+        scaled = scaler.fit_transform(matrix).astype(np.float32)
+        feature_min = imputed.min().to_numpy(dtype=np.float32)
+        feature_max = imputed.max().to_numpy(dtype=np.float32)
+    denominator = np.where(feature_max > feature_min, feature_max - feature_min, 1.0)
+    unit = np.clip((matrix - feature_min) / denominator, 0.0, 1.0).astype(np.float32)
+    return (
+        tracks,
+        feature_order,
+        normalize(scaled, norm="l2").astype(np.float32),
+        scaled,
+        unit,
+        feature_min,
+        feature_max,
+    )
 
 
-def fit_catalog_models(scaled_features: np.ndarray) -> tuple[PCA, np.ndarray, KMeans, np.ndarray, NearestNeighbors, dict[int, float]]:
-    """Fit the notebook's PCA/K-Means stages and an item-neighbor index for Flask recommendations."""
+def fit_catalog_models(scaled_features: np.ndarray, artifact: dict | None = None) -> tuple[PCA, np.ndarray, KMeans, np.ndarray, NearestNeighbors, dict[int, float]]:
+    """Use the notebook's fitted PCA/K-Means, or fit them if no artifact exists."""
+    if artifact:
+        pca = artifact["pca"]
+        # The notebook's PCA/K-Means were fitted on float64 arrays. Keep that
+        # dtype through prediction, then store float32 vectors for the index.
+        pca_vectors = pca.transform(scaled_features).astype(np.float64)
+        kmeans = artifact["kmeans"]
+        cluster_labels = kmeans.predict(pca_vectors)
+        pca_vectors = pca_vectors.astype(np.float32)
+        scores = {int(k): float(v) for k, v in artifact.get("kmeans_silhouettes", {}).items()}
+        neighbors = NearestNeighbors(metric="euclidean", algorithm="auto", n_jobs=-1)
+        neighbors.fit(pca_vectors)
+        return pca, pca_vectors, kmeans, cluster_labels, neighbors, scores
+
     pca = PCA(n_components=PCA_VARIANCE_TARGET, svd_solver="full", random_state=KMEANS_SEED)
     pca_vectors = pca.fit_transform(scaled_features).astype(np.float32)
 
@@ -196,8 +300,23 @@ def fit_catalog_models(scaled_features: np.ndarray) -> tuple[PCA, np.ndarray, KM
     return pca, pca_vectors, kmeans, cluster_labels, neighbors, scores
 
 
-TRACKS, AUDIO_FEATURES, AUDIO_VECTORS, STANDARDIZED_FEATURES = load_catalog()
-PCA_MODEL, PCA_VECTORS, KMEANS_MODEL, CLUSTER_LABELS, PCA_KNN, KMEANS_SILHOUETTES = fit_catalog_models(STANDARDIZED_FEATURES)
+RECOMMENDER_ARTIFACT = load_recommender_artifact()
+if RECOMMENDER_ARTIFACT:
+    CLASSIFIER_BLEND = float(RECOMMENDER_ARTIFACT.get("classifier_blend", CLASSIFIER_BLEND))
+    LINUCB_ALPHA = float(RECOMMENDER_ARTIFACT.get("linucb_alpha", LINUCB_ALPHA))
+    LINUCB_BLEND = float(RECOMMENDER_ARTIFACT.get("linucb_blend", LINUCB_BLEND))
+(
+    TRACKS,
+    AUDIO_FEATURES,
+    AUDIO_VECTORS,
+    STANDARDIZED_FEATURES,
+    UNIT_FEATURES,
+    FEATURE_MIN,
+    FEATURE_MAX,
+) = load_catalog()
+PCA_MODEL, PCA_VECTORS, KMEANS_MODEL, CLUSTER_LABELS, PCA_KNN, KMEANS_SILHOUETTES = fit_catalog_models(
+    STANDARDIZED_FEATURES, RECOMMENDER_ARTIFACT
+)
 SELECTED_K = KMEANS_MODEL.n_clusters
 PCA_CONTEXT = normalize(PCA_VECTORS, norm="l2").astype(np.float32)
 CLUSTER_CONTEXT = np.eye(SELECTED_K, dtype=np.float32)[CLUSTER_LABELS]
@@ -297,6 +416,67 @@ def update_bandit(track_idx: int, feedback: str) -> tuple[int, float]:
     })
     save_bandit_state(state)
     return state["updates"], reward
+
+
+def valid_feedback_events(state: dict | None = None) -> list[dict]:
+    """Feedback rows that still point at a usable catalog track."""
+    state = state or load_bandit_state()
+    return [
+        event for event in state.get("events", [])
+        if isinstance(event.get("track_idx"), int)
+        and 0 <= event["track_idx"] < len(TRACKS)
+        and event.get("feedback") in {"like", "skip"}
+    ]
+
+
+def feedback_preference_profile(state: dict | None = None) -> np.ndarray | None:
+    """Estimate a 0..1 listener profile from real Like/Skip feedback."""
+    events = valid_feedback_events(state)
+    if not events:
+        return None
+    liked_rows = [event["track_idx"] for event in events if event["feedback"] == "like"]
+    skipped_rows = [event["track_idx"] for event in events if event["feedback"] == "skip"]
+    median = np.median(UNIT_FEATURES, axis=0)
+    liked_mean = UNIT_FEATURES[liked_rows].mean(axis=0) if liked_rows else median
+    skipped_mean = UNIT_FEATURES[skipped_rows].mean(axis=0) if skipped_rows else median
+    # Start from liked tracks, then move away from skipped tracks relative to
+    # the catalog median. The result uses the same 0..1 space as the notebook.
+    profile = liked_mean - 0.5 * (skipped_mean - median)
+    return np.clip(profile, 0.0, 1.0).astype(np.float32)
+
+
+def classifier_probabilities(candidate_pool: np.ndarray, state: dict | None = None) -> np.ndarray | None:
+    """Predict Like probability with the tuned notebook classifier.
+
+    The classifier is only enabled after real feedback contains both classes.
+    Cold start stays content-based and lets LinUCB explore.
+    """
+    artifact = RECOMMENDER_ARTIFACT
+    if not artifact:
+        return None
+    events = valid_feedback_events(state)
+    if len(events) < MIN_CLASSIFIER_EVENTS:
+        return None
+    if len({event["feedback"] for event in events}) < 2:
+        return None
+    profile = feedback_preference_profile(state)
+    if profile is None:
+        return None
+    scaler = artifact["scaler"]
+    preference = (
+        profile * (FEATURE_MAX - FEATURE_MIN) + FEATURE_MIN - scaler.mean_
+    ) / scaler.scale_
+    track_block = STANDARDIZED_FEATURES[candidate_pool]
+    classifier_features = list(artifact["classifier_features"])
+    frame = pd.DataFrame(
+        np.column_stack([track_block, np.tile(preference, (len(candidate_pool), 1))]),
+        columns=classifier_features,
+    )
+    model = artifact["classifier"]
+    probabilities = model.predict_proba(frame)
+    classes = np.asarray(getattr(model, "classes_", [0, 1]))
+    like_column = int(np.flatnonzero(classes == 1)[0]) if np.any(classes == 1) else probabilities.shape[1] - 1
+    return np.asarray(probabilities[:, like_column], dtype=np.float32)
 
 
 def artist_main(row: pd.Series) -> str:
@@ -871,24 +1051,25 @@ def recommend(seed_idx: int, limit: int = 8, with_art: bool = True) -> list[dict
             pool_artist_counts[key] = pool_artist_counts.get(key, 0) + 1
     candidate_pool = np.asarray(pool_list, dtype=int)
 
-    # Fit a small KNN preference model when both explicit feedback classes are
-    # available. Cold start continues to use PCA neighbors and K-Means.
+    # Use the tuned notebook classifier once real feedback contains both Like
+    # and Skip. Before that, cold start relies on content signals and LinUCB.
     state = load_bandit_state()
-    feedback_events = [
-        event for event in state.get("events", [])
-        if isinstance(event.get("track_idx"), int) and 0 <= event["track_idx"] < len(TRACKS)
-        and event.get("feedback") in {"like", "skip"}
-    ]
+    classifier_scores = classifier_probabilities(candidate_pool, state)
+
+    # Keep the small online KNN as a fallback when the shared artifact is
+    # unavailable, so the live demo still learns from explicit feedback.
     knn_preference_scores: np.ndarray | None = None
-    feedback_rows = np.asarray([event["track_idx"] for event in feedback_events], dtype=int)
-    feedback_labels = np.asarray([event["feedback"] == "like" for event in feedback_events], dtype=int)
-    if len(feedback_rows) >= 2 and len(np.unique(feedback_labels)) == 2:
-        preference_model = KNeighborsClassifier(
-            n_neighbors=min(5, len(feedback_rows)), weights="distance"
-        )
-        preference_model.fit(MODEL_CONTEXTS[feedback_rows], feedback_labels)
-        like_column = int(np.flatnonzero(preference_model.classes_ == 1)[0])
-        knn_preference_scores = preference_model.predict_proba(MODEL_CONTEXTS[candidate_pool])[:, like_column]
+    if classifier_scores is None:
+        feedback_events = valid_feedback_events(state)
+        feedback_rows = np.asarray([event["track_idx"] for event in feedback_events], dtype=int)
+        feedback_labels = np.asarray([event["feedback"] == "like" for event in feedback_events], dtype=int)
+        if len(feedback_rows) >= 2 and len(np.unique(feedback_labels)) == 2:
+            preference_model = KNeighborsClassifier(
+                n_neighbors=min(5, len(feedback_rows)), weights="distance"
+            )
+            preference_model.fit(MODEL_CONTEXTS[feedback_rows], feedback_labels)
+            like_column = int(np.flatnonzero(preference_model.classes_ == 1)[0])
+            knn_preference_scores = preference_model.predict_proba(MODEL_CONTEXTS[candidate_pool])[:, like_column]
 
     # LinUCB reranks the diversified Top-50 using the same PCA/cluster context.
     inverse = np.linalg.inv(state["A"])
@@ -900,7 +1081,9 @@ def recommend(seed_idx: int, limit: int = 8, with_art: bool = True) -> list[dict
     bandit_scores = np.clip((np.tanh(ucb) + 1.0) / 2.0, 0.0, 1.0)
     ranking_scores = content_scores.copy()
     feedback_scores = content_scores[candidate_pool]
-    if knn_preference_scores is not None:
+    if classifier_scores is not None:
+        feedback_scores = (1.0 - CLASSIFIER_BLEND) * feedback_scores + CLASSIFIER_BLEND * classifier_scores
+    elif knn_preference_scores is not None:
         feedback_scores = 0.80 * feedback_scores + 0.20 * knn_preference_scores
     ranking_scores[candidate_pool] = (1.0 - LINUCB_BLEND) * feedback_scores + LINUCB_BLEND * bandit_scores
     ranking_scores[seed_idx] = -1
@@ -983,6 +1166,10 @@ def recommend(seed_idx: int, limit: int = 8, with_art: bool = True) -> list[dict
             "score": float(ranking_scores[idx]),
             "similarity": float(content_scores[idx]),
             "bandit_score": float(bandit_scores[np.where(candidate_pool == idx)[0][0]]),
+            "classifier_score": (
+                float(classifier_scores[np.where(candidate_pool == idx)[0][0]])
+                if classifier_scores is not None else None
+            ),
             "knn_preference": (
                 float(knn_preference_scores[np.where(candidate_pool == idx)[0][0]])
                 if knn_preference_scores is not None else None
@@ -1069,7 +1256,7 @@ def render_main(seed_idx: int | None = None):
         features=AUDIO_FEATURES,
         pca_components=PCA_VECTORS.shape[1],
         selected_k=SELECTED_K,
-        best_silhouette=KMEANS_SILHOUETTES[SELECTED_K],
+        best_silhouette=KMEANS_SILHOUETTES.get(SELECTED_K, 0.0),
         song_count=len(TRACKS),
         connected=spotify_connected(),
     )
@@ -2038,8 +2225,10 @@ def health():
         "pca_components": PCA_VECTORS.shape[1],
         "pca_explained_variance": float(PCA_MODEL.explained_variance_ratio_.sum()),
         "kmeans_clusters": SELECTED_K,
-        "kmeans_silhouette": KMEANS_SILHOUETTES[SELECTED_K],
-        "recommendation_methods": ["PCA", "K-Means", "PCA KNN", "KNN feedback model", "LinUCB"],
+        "kmeans_silhouette": KMEANS_SILHOUETTES.get(SELECTED_K),
+        "recommender_artifact": RECOMMENDER_ARTIFACT is not None,
+        "classifier": (RECOMMENDER_ARTIFACT or {}).get("classifier_name", "Online KNN fallback"),
+        "recommendation_methods": ["PCA", "K-Means", "PCA KNN", "Tuned classifier", "LinUCB"],
     }
 
 

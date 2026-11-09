@@ -17,11 +17,30 @@ function clearResults() {
   resultsBox.classList.remove("open");
 }
 
+async function searchSpotifyTracks(query, signal) {
+  const { access_token } = await api("/api/spotify/token", { signal });
+  const response = await fetch(`https://api.spotify.com/v1/search?type=track&limit=10&q=${encodeURIComponent(query)}`, {
+    signal,
+    headers: { Authorization: `Bearer ${access_token}` },
+  });
+  if (!response.ok) throw new Error(`Spotify search failed (${response.status}).`);
+  const payload = await response.json();
+  return (payload.tracks?.items || []).map((item) => ({
+    name: item.name,
+    artist: (item.artists || []).map((artist) => artist.name).join(", "),
+    uri: item.uri,
+    art: item.album?.images?.[0]?.url || "",
+    duration_ms: item.duration_ms || 0,
+  })).filter((track) => track.uri);
+}
+
 function chooseTrack(track) {
   input.value = `${track.name} — ${track.artist}`;
   clearResults();
-  // Picking a search result starts it right away; auto queue fills the rail.
-  if (connected) playTrack(track.index, track.index);
+  // Search returns Spotify's exact track URI so similarly named catalog rows
+  // cannot silently start a different recording.
+  if (connected && track.uri) playSpotifyTrack(track);
+  else if (connected && Number.isInteger(track.index)) playTrack(track.index, track.index);
   else toast("Connect Spotify to play this song.", true);
 }
 
@@ -36,16 +55,28 @@ input?.addEventListener("input", () => {
   timer = setTimeout(async () => {
     controller = new AbortController();
     try {
-      const response = await fetch(`/api/search?q=${encodeURIComponent(query)}`, { signal: controller.signal });
-      const data = await response.json();
+      let tracks = [];
+      if (connected) {
+        try {
+          tracks = await searchSpotifyTracks(query, controller.signal);
+        } catch (error) {
+          if (error.name === "AbortError") throw error;
+          console.warn("Spotify search unavailable; using the local catalog", error);
+        }
+      }
+      if (!tracks.length) {
+        const response = await fetch(`/api/search?q=${encodeURIComponent(query)}`, { signal: controller.signal });
+        const data = await response.json();
+        tracks = data.results || [];
+      }
       clearResults();
-      if (!data.results.length) {
+      if (!tracks.length) {
         const empty = document.createElement("div");
         empty.className = "search-empty";
         empty.textContent = "No matching tracks found";
         resultsBox.append(empty);
       } else {
-        data.results.forEach((track) => {
+        tracks.forEach((track) => {
           const button = document.createElement("button");
           button.type = "button";
           button.className = "search-result";
@@ -79,15 +110,20 @@ function scrollMainTo(element, offset = 16) {
 }
 
 function showView(name) {
-  document.querySelectorAll(".view").forEach((view) => view.classList.toggle("is-active", view.id === `view-${name}`));
+  const sectionRoute = name === "mixes" || name === "playlists";
+  const viewName = sectionRoute ? "listen" : name;
+  document.querySelectorAll(".view").forEach((view) => view.classList.toggle("is-active", view.id === `view-${viewName}`));
   document.querySelectorAll(".nav-link, .nav-tab, .side-link").forEach((btn) => {
-    const active = btn.dataset.view === name;
+    const active = btn.dataset.view === name || (sectionRoute && btn.dataset.view === "listen");
     btn.classList.toggle("active", active);
     if (active) btn.setAttribute("aria-current", "page");
     else btn.removeAttribute("aria-current");
   });
   const scroller = document.querySelector("#main");
-  scroller?.scrollTo({ top: 0, behavior: "instant" });
+  const section = name === "mixes" ? document.querySelector("#mixes-section")
+    : name === "playlists" ? document.querySelector("#playlists-section") : null;
+  if (section) scrollMainTo(section, 16);
+  else scroller?.scrollTo({ top: 0, behavior: "instant" });
   window.scrollTo({ top: 0, behavior: "instant" });
 }
 document.querySelectorAll("[data-view]").forEach((el) => {
@@ -98,6 +134,8 @@ document.querySelectorAll("[data-view]").forEach((el) => {
 const csrf = document.querySelector("#player-panel")?.dataset.csrf || "";
 const connected = document.querySelector("#player-panel")?.dataset.connected === "true";
 const playerStatus = document.querySelector("#player-status");
+let feedbackInFlight = false;
+let likedTrackUri = "";
 let browserPlayer = null;
 let browserDeviceId = null;
 let browserReady = null;
@@ -143,7 +181,7 @@ function setAppCoverBackground(image) {
   let backdrop = image || "";
   try {
     if (backdrop) localStorage.setItem(appCoverStorageKey, backdrop);
-    else backdrop = localStorage.getItem(appCoverStorageKey) || "";
+    else localStorage.removeItem(appCoverStorageKey);
   } catch (error) { /* keep the live cover even when storage is unavailable */ }
   if (!appEl) return;
   if (backdrop) {
@@ -499,7 +537,8 @@ document.querySelector("#toggle-play")?.addEventListener("click", async () => {
 async function sendPlayerFeedback(feedback) {
   const status = document.querySelector("#player-feedback-status");
   const button = document.querySelector(feedback === "skip" ? "#next-track" : "#like-current-track");
-  if (button?.disabled) return;
+  if (feedbackInFlight) return;
+  feedbackInFlight = true;
   if (feedback === "skip") { clearTimeout(mixEndTimer); mixEndTimer = null; mixEnding = false; }
   if (button) button.disabled = true;
   if (status) status.textContent = feedback === "skip" ? "Saving dislike…" : "Saving like…";
@@ -515,12 +554,22 @@ async function sendPlayerFeedback(feedback) {
         const link = document.createElement("a"); link.href = result.playlist_url; link.target = "_blank"; link.rel = "noopener noreferrer"; link.textContent = " Open playlist"; status.append(link);
       }
     }
+    toast(result.message || (feedback === "like" ? "Song liked." : "Skip feedback saved."));
+    if (feedback === "like") {
+      likedTrackUri = latestState?.uri || "";
+      document.querySelectorAll("#cover-btn-like, #side-like-btn, #now-like").forEach((likeButton) => {
+        likeButton.classList.add("is-liked");
+        likeButton.setAttribute("aria-pressed", "true");
+        likeButton.title = "Liked song";
+        likeButton.querySelector("use")?.setAttribute("href", "#i-heart-filled");
+      });
+    }
     await refreshLearning().catch(() => {});
     if (feedback === "skip") {
       await refreshPlayer();
     }
-  } catch (error) { if (status) status.textContent = error.message; }
-  finally { if (button) button.disabled = false; }
+  } catch (error) { if (status) status.textContent = error.message; toast(error.message, true); }
+  finally { feedbackInFlight = false; if (button) button.disabled = false; }
 }
 
 document.querySelector("#next-track")?.addEventListener("click", () => sendPlayerFeedback("skip"));
@@ -698,6 +747,46 @@ async function playTrack(rowIndex, seedIndex, { positionMs = 0, silent = false }
   }
 }
 
+async function playSpotifyTrack(track) {
+  if (playInFlight) return;
+  clearTimeout(mixEndTimer); mixEndTimer = null;
+  prefetchedTracks = [];
+  playInFlight = true;
+  activateBrowserAudio();
+  try {
+    await initialiseBrowserPlayer();
+    if (!browserDeviceId) throw new Error("The web player is still connecting. Try again in a moment.");
+    await api("/api/play", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ uris: [track.uri], offset: 0, device_id: browserDeviceId }),
+    });
+    appQueue = [{
+      index: null,
+      name: track.name,
+      artist: track.artist,
+      uri: track.uri,
+      art: track.art || "",
+    }];
+    queueMode = autoQueueEnabled ? "auto" : "track";
+    mixEnding = false;
+    renderQueue();
+    queueSyncFor = latestState?.uri || "";
+    toast(`Playing ${track.name}.`);
+    await refreshPlayer();
+    // Queue refill/restart guards against running during a track switch.
+    playInFlight = false;
+    if (autoQueueEnabled) {
+      const added = await topUpQueue();
+      if (added) await restartAutoQueue();
+    }
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    playInFlight = false;
+  }
+}
+
 /* The app queue is the app's own list (played as a Spotify context), so items can
    be removed - unlike Spotify's native queue, which its API cannot edit. */
 function queueGroupLabel(text) {
@@ -817,7 +906,9 @@ function renderQueue() {
   const summary = document.querySelector("#queue-summary");
   if (!list) return;
   cleanQueue();
-  setAppCoverBackground(latestState?.image || appQueue.find((track) => track?.art)?.art || "");
+  setAppCoverBackground(
+    (latestState?.track ? latestState.image : "") || appQueue.find((track) => track?.art)?.art || "",
+  );
   saveQueue();
   const currentIndex = latestState?.uri
     ? appQueue.findIndex((track) => track.uri === latestState.uri)
@@ -851,7 +942,17 @@ function renderQueue() {
 function renderNowHero() {
   const hero = document.querySelector("#now-hero");
   if (!hero) return;
-  const image = latestState?.image || "";
+  if (likedTrackUri && latestState?.uri !== likedTrackUri) {
+    document.querySelectorAll("#cover-btn-like, #side-like-btn, #now-like").forEach((likeButton) => {
+      likeButton.classList.remove("is-liked");
+      likeButton.setAttribute("aria-pressed", "false");
+      likeButton.title = "Like current song";
+      likeButton.querySelector("use")?.setAttribute("href", "#i-heart");
+    });
+    likedTrackUri = "";
+  }
+  const hasTrack = Boolean(latestState?.track);
+  const image = hasTrack ? latestState?.image || "" : "";
   const art = document.querySelector("#now-art");
   if (art) {
     if (image) {
@@ -868,10 +969,9 @@ function renderNowHero() {
   const label = document.querySelector("#now-vinyl-label");
   if (label) label.style.backgroundImage = image ? `url("${image}")` : "";
   hero.style.setProperty("--hero-image", image ? `url("${image}")` : "none");
-  setAppCoverBackground(image);
+  setAppCoverBackground(image || appQueue.find((track) => track?.art)?.art || "");
   hero.classList.toggle("has-image", Boolean(image));
 
-  const hasTrack = Boolean(latestState?.track);
   const title = latestState?.track || "Nothing playing";
   const artist = latestState?.artist || "Pick a song to start";
   const titleEl = document.querySelector("#now-title");
@@ -879,7 +979,12 @@ function renderNowHero() {
   const artistEl = document.querySelector("#now-artist");
   if (artistEl) artistEl.textContent = artist;
   const albumEl = document.querySelector("#now-album");
-  if (albumEl) albumEl.textContent = latestState?.album || "";
+  const album = latestState?.album || "";
+  if (albumEl) albumEl.textContent = album;
+  const albumMeta = document.querySelector("#album-meta");
+  if (albumMeta) albumMeta.hidden = !hasTrack || !album;
+  const artistLabel = document.querySelector("#artist-meta .meta-label");
+  if (artistLabel) artistLabel.hidden = !hasTrack;
   const ghost = document.querySelector("#now-ghost");
   if (ghost) ghost.textContent = hasTrack ? title.toUpperCase() : "YOUR MUSIC";
 
@@ -887,10 +992,7 @@ function renderNowHero() {
   if (kicker) { kicker.textContent = hasTrack ? "SQ" : "READY"; kicker.hidden = !hasTrack; }
   const source = document.querySelector("#now-source");
   if (source) {
-    source.textContent = latestState?.device_name
-      ? `Playing on ${latestState.device_name}`
-      : "TuneTwin AI";
-    source.hidden = !hasTrack;
+    source.hidden = true;
   }
   const playingLabel = document.querySelector("#hero-playing-label");
   if (playingLabel) {
@@ -951,9 +1053,6 @@ document.querySelector("#cover-btn-share")?.addEventListener("click", () => {
   }
 });
 document.querySelector("#cover-btn-folder")?.addEventListener("click", () => showView("playlists"));
-document.querySelector("#cover-btn-comment")?.addEventListener("click", () => {
-  scrollMainTo(document.querySelector(".comment-column"));
-});
 document.querySelector(".player-track")?.addEventListener("click", (event) => {
   if (event.target.closest("button")) return;
   focusNowHero();
@@ -1514,32 +1613,64 @@ const detailArtRequested = new Set();
 /* Detail lists (especially fixed mood mixes) can arrive without covers; fill
    them in from the catalogue once the list is already on screen. */
 function hydrateDetailArt(container) {
-  const targets = [...container.querySelectorAll(".row-art[data-art-index]")]
-    .filter((el) => !el.querySelector("img") && !detailArtRequested.has(el.dataset.artIndex));
+  const targets = [...container.querySelectorAll(".row-art[data-art-index], .row-art[data-art-uri]")]
+    .filter((el) => !el.querySelector("img")
+      && !detailArtRequested.has(el.dataset.artIndex || el.dataset.artUri));
   if (!targets.length) return;
-  const indices = [...new Set(targets.map((el) => Number(el.dataset.artIndex)))];
-  indices.forEach((index) => detailArtRequested.add(String(index)));
-  api("/api/catalog/art", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ indices }),
-  }).then((data) => {
-    const art = data.art || {};
-    targets.forEach((el) => {
-      if (el.querySelector("img")) return;
-      const url = art[el.dataset.artIndex];
-      if (!url) return;
-      const img = document.createElement("img");
-      img.src = url;
-      img.alt = "";
-      img.decoding = "async";
-      img.referrerPolicy = "no-referrer";
-      img.addEventListener("error", () => img.remove());
-      el.append(img);
-    });
-  }).catch(() => {
-    indices.forEach((index) => detailArtRequested.delete(String(index)));
-  });
+  const artKey = (el) => el.dataset.artIndex || el.dataset.artUri;
+  targets.forEach((el) => detailArtRequested.add(artKey(el)));
+  const attachArt = (el, url) => {
+    if (!url || !el?.isConnected || el.querySelector("img")) return;
+    const img = document.createElement("img");
+    img.src = url;
+    img.alt = "";
+    img.decoding = "async";
+    img.referrerPolicy = "no-referrer";
+    img.addEventListener("error", () => {
+      img.remove();
+      detailArtRequested.delete(artKey(el));
+    }, { once: true });
+    el.append(img);
+  };
+
+  (async () => {
+    try {
+      const indices = [...new Set(targets.map((el) => Number(el.dataset.artIndex)).filter(Number.isInteger))];
+      if (indices.length) {
+        const data = await api("/api/catalog/art", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ indices }),
+        });
+        targets.forEach((el) => attachArt(el, data.art?.[el.dataset.artIndex]));
+      }
+
+      // Some catalog rows have a playable Spotify URI but no local cover ID.
+      const missing = targets.filter((el) => !el.querySelector("img") && el.dataset.artUri);
+      for (let offset = 0; offset < missing.length; offset += 50) {
+        const batch = missing.slice(offset, offset + 50);
+        const ids = batch.map((el) => el.dataset.artUri.replace(/^spotify:track:/, "")).filter(Boolean);
+        if (!ids.length) continue;
+        const { access_token } = await api("/api/spotify/token");
+        const response = await fetch(`https://api.spotify.com/v1/tracks?ids=${encodeURIComponent(ids.join(","))}`, {
+          headers: { Authorization: `Bearer ${access_token}` },
+        });
+        if (!response.ok) throw new Error(`Spotify cover lookup failed (${response.status}).`);
+        const payload = await response.json();
+        (payload.tracks || []).forEach((track) => {
+          if (!track?.uri) return;
+          const target = batch.find((el) => el.dataset.artUri === track.uri);
+          attachArt(target, track.album?.images?.[0]?.url);
+        });
+      }
+    } catch (error) {
+      console.warn("Could not load all track cover art", error);
+    } finally {
+      targets.forEach((el) => {
+        if (!el.querySelector("img")) detailArtRequested.delete(artKey(el));
+      });
+    }
+  })();
 }
 
 function renderDetailRows(container, tracks, tagFor, onPlay, onAdd = null) {
@@ -1565,6 +1696,7 @@ function renderDetailRows(container, tracks, tagFor, onPlay, onAdd = null) {
     } else if (Number.isInteger(track.index)) {
       art.dataset.artIndex = String(track.index);
     }
+    if (!track.art && track.uri) art.dataset.artUri = track.uri;
     const main = document.createElement("div");
     main.className = "row-main";
     const name = document.createElement("strong");
@@ -1637,6 +1769,7 @@ function showDetail(config) {
     config.tagFor || (() => "model pick"),
     (index) => config.onPlayPrimary?.(index),
   );
+  hydrateDetailArt(document.querySelector("#detail-primary"));
   const secondary = config.secondary || [];
   const secondaryWrap = document.querySelector("#detail-secondary-wrap");
   if (secondaryWrap) secondaryWrap.hidden = secondary.length === 0;
@@ -1650,6 +1783,7 @@ function showDetail(config) {
       (index) => config.onPlaySecondary?.(index),
       config.onAddSecondary || null,
     );
+    hydrateDetailArt(document.querySelector("#detail-secondary"));
   }
   const exportForm = document.querySelector("#detail-export");
   if (exportForm) exportForm.hidden = !config.mood;

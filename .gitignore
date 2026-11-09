@@ -2,7 +2,8 @@
 .spotify_token_cache
 .cache
 app_server*.log
-models/
+models/*
+!models/tunetwin_recommender.joblib
 .ipynb_checkpoints/
 __pycache__/
 data/
