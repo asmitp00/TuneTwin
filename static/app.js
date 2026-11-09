@@ -1,11 +1,4 @@
-/* ==========================================================================
-   TuneTwin AI front-end
-   MelodyMind-style UI: violet glass shell, hash-free client views, and one
-   cover-art palette (--cover-a/b/c) that follows the whole app.
-    Keeps Spotify Connect playback, search, queue, and feedback behaviour.
-   ========================================================================== */
 
-/* ---------------------------------------------------------------- Search */
 const input = document.querySelector("#track-search");
 const resultsBox = document.querySelector("#search-results");
 let timer;
