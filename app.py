@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import ast
+import gc
 import json
 import logging
 import os
 import re
 import secrets
+import sqlite3
+import threading
 import time
 import unicodedata
 import urllib.request
@@ -15,15 +18,19 @@ from concurrent.futures import ThreadPoolExecutor
 from difflib import SequenceMatcher
 from functools import lru_cache
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import joblib
 import numpy as np
 import pandas as pd
 import spotipy
 from dotenv import load_dotenv
-from flask import Flask, abort, flash, redirect, render_template, request, session, url_for
+from flask import Flask, abort, flash, g, has_request_context, redirect, render_template, request, session, url_for
+from spotipy.cache_handler import CacheHandler, MemoryCacheHandler
 from spotipy.oauth2 import SpotifyClientCredentials, SpotifyOAuth
+from werkzeug.middleware.proxy_fix import ProxyFix
+
+from storage import Storage
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.neighbors import KNeighborsClassifier, NearestNeighbors
@@ -42,7 +49,9 @@ REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:8888/callback
 # unhelpful client-side error: "Invalid token scopes."
 SCOPES = "user-read-playback-state user-modify-playback-state streaming user-read-currently-playing user-read-recently-played user-read-email user-read-private playlist-read-private playlist-modify-private playlist-modify-public"
 PLAYBACK_SCOPES = {"user-read-playback-state", "user-modify-playback-state", "user-read-currently-playing", "streaming", "user-read-email", "user-read-private"}
-LINUCB_PATH = ROOT / "models" / "linucb_live.json"
+DB_PATH = Path(os.getenv("TUNETWIN_DB_PATH", ROOT / "instance" / "tunetwin.db"))
+# An https callback means the app is deployed behind TLS, not running locally.
+DEPLOYED = REDIRECT_URI.startswith("https://")
 RECOMMENDER_ARTIFACT_PATH = ROOT / "models" / "tunetwin_recommender.joblib"
 LINUCB_ALPHA = 0.20
 LINUCB_BLEND = 0.25
@@ -62,13 +71,31 @@ DERIVED_FEATURE_ORDER = [
 ]
 
 app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET_KEY") or secrets.token_urlsafe(32)
+_secret_key = os.getenv("FLASK_SECRET_KEY")
+if not _secret_key:
+    if DEPLOYED:
+        # A random per-process key would sign every listener out on each
+        # restart, and would differ between server processes.
+        raise RuntimeError("Set FLASK_SECRET_KEY before deploying TuneTwin.")
+    logging.warning("FLASK_SECRET_KEY is not set; using a temporary key (sessions reset on restart).")
+app.secret_key = _secret_key or secrets.token_urlsafe(32)
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=DEPLOYED,
+    PERMANENT_SESSION_LIFETIME=timedelta(days=30),
     TEMPLATES_AUTO_RELOAD=True,
     SEND_FILE_MAX_AGE_DEFAULT=0,
 )
+# Hosting platforms terminate HTTPS at a proxy; trust its forwarded headers.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+# DATABASE_URL (e.g. a Neon PostgreSQL URL) keeps accounts and learning across
+# restarts; without it, a local SQLite file is used.
+STORE = Storage(os.getenv("DATABASE_URL") or DB_PATH)
+logging.getLogger(__name__).warning("TuneTwin storage: %s", STORE.description)
+if DEPLOYED and STORE.backend == "sqlite":
+    logging.warning("Deployed without DATABASE_URL: accounts and learning live in a local SQLite file and may be lost on restart.")
+_LEARNING_LOCK = threading.Lock()
 
 
 @app.after_request
@@ -186,14 +213,23 @@ def load_catalog() -> tuple[pd.DataFrame, list[str], np.ndarray, np.ndarray, np.
         raise ValueError("The track CSV has none of the supported audio feature columns.")
 
     tracks = tracks.dropna(subset=[name_col]).drop_duplicates().reset_index(drop=True)
-    tracks["_name_col"] = name_col
-    tracks["_artist_col"] = artist_col
+    tracks.attrs["name_col"] = name_col
+    tracks.attrs["artist_col"] = artist_col
+    # Many tracks share the same artists, so their artist/genre sets are equal.
+    # Store one shared frozenset per distinct value instead of 170k separate
+    # sets; this roughly halves the catalog's memory without changing results.
+    shared_sets: dict[frozenset, frozenset] = {}
+
+    def shared(values) -> frozenset:
+        key = frozenset(values)
+        return shared_sets.setdefault(key, key)
+
     tracks["_name"] = tracks[name_col].astype(str).str.strip()
     tracks["_artists"] = tracks[artist_col].map(parse_list)
     tracks["_artist_display"] = tracks["_artists"].map(lambda xs: ", ".join(xs) if xs else "Unknown artist")
-    tracks["_artist_keys"] = tracks["_artists"].map(lambda xs: {x.casefold().strip() for x in xs if x.strip()})
+    tracks["_artist_keys"] = tracks["_artists"].map(lambda xs: shared(x.casefold().strip() for x in xs if x.strip()))
     tracks["_artist_identity_keys"] = tracks["_artists"].map(
-        lambda xs: {normalize_artist_name(x) for x in xs if x.strip()}
+        lambda xs: shared(normalize_artist_name(x) for x in xs if x.strip())
     )
     tracks["_title_key"] = tracks["_name"].map(normalize_song_title)
     tracks["_song_key"] = tracks["_artists"].map(
@@ -211,7 +247,7 @@ def load_catalog() -> tuple[pd.DataFrame, list[str], np.ndarray, np.ndarray, np.
                 for name in parse_list(artist):
                     artist_genres.setdefault(name.casefold().strip(), set()).update(parsed_tags)
     tracks["_genres"] = tracks["_artists"].map(
-        lambda artists: set().union(*(artist_genres.get(a.casefold().strip(), set()) for a in artists)) if artists else set()
+        lambda artists: shared(set().union(*(artist_genres.get(a.casefold().strip(), set()) for a in artists)) if artists else ())
     )
 
     numeric = tracks[feature_cols].apply(pd.to_numeric, errors="coerce")
@@ -247,6 +283,10 @@ def load_catalog() -> tuple[pd.DataFrame, list[str], np.ndarray, np.ndarray, np.
         feature_max = imputed.max().to_numpy(dtype=np.float32)
     denominator = np.where(feature_max > feature_min, feature_max - feature_min, 1.0)
     unit = np.clip((matrix - feature_min) / denominator, 0.0, 1.0).astype(np.float32)
+    # The raw title/artist text is now held in the cleaned `_name`/`_artists`
+    # columns, and the release date is never read; drop them to save memory.
+    unused = [c for c in dict.fromkeys([name_col, artist_col, "release_date"]) if c in tracks.columns]
+    tracks = tracks.drop(columns=unused)
     return (
         tracks,
         feature_order,
@@ -321,8 +361,8 @@ SELECTED_K = KMEANS_MODEL.n_clusters
 PCA_CONTEXT = normalize(PCA_VECTORS, norm="l2").astype(np.float32)
 CLUSTER_CONTEXT = np.eye(SELECTED_K, dtype=np.float32)[CLUSTER_LABELS]
 MODEL_CONTEXTS = normalize(np.hstack([AUDIO_VECTORS, PCA_CONTEXT, CLUSTER_CONTEXT]), norm="l2").astype(np.float32)
-NAME_COL = TRACKS["_name_col"].iloc[0]
-ARTIST_COL = TRACKS["_artist_col"].iloc[0]
+NAME_COL = TRACKS.attrs["name_col"]
+ARTIST_COL = TRACKS.attrs["artist_col"]
 PRIMARY_ARTISTS = TRACKS["_artists"].map(lambda artists: artists[0].casefold().strip() if artists else "")
 PRIMARY_ARTIST_KEYS = PRIMARY_ARTISTS.to_numpy()
 TITLE_KEYS = TRACKS["_title_key"].to_numpy()
@@ -354,6 +394,8 @@ TITLE_ROWS: dict[str, list[int]] = {}
 for _row_idx, _title_key in enumerate(TRACKS["_title_key"]):
     if _title_key:
         TITLE_ROWS.setdefault(_title_key, []).append(_row_idx)
+# Release the large temporary frames from catalog loading before serving.
+gc.collect()
 
 MOOD_PROFILES = {
     "Upbeat": {"valence": 1.0, "energy": 0.8, "danceability": 0.7},
@@ -369,52 +411,85 @@ MOOD_MIX_COPY = {
 }
 
 
-def load_bandit_state() -> dict:
+def current_user_id() -> str | None:
+    """Spotify user ID of the signed-in listener for this request, if any."""
+    if not has_request_context():
+        return None
+    return session.get("user_id")
+
+
+def current_owner_id(create: bool = False) -> str | None:
+    """Who owns the learning state: the signed-in user, else a browser guest ID."""
+    if not has_request_context():
+        return None
+    user_id = session.get("user_id")
+    if user_id:
+        return user_id
+    guest_id = session.get("guest_id")
+    if not guest_id and create:
+        guest_id = f"guest:{secrets.token_urlsafe(16)}"
+        session["guest_id"] = guest_id
+        session.permanent = True
+    return guest_id
+
+
+def fresh_bandit_state() -> dict:
     dimension = MODEL_CONTEXTS.shape[1]
-    try:
-        state = json.loads(LINUCB_PATH.read_text(encoding="utf-8"))
-        matrix = np.asarray(state["A"], dtype=float)
-        vector = np.asarray(state["b"], dtype=float)
-        if matrix.shape == (dimension, dimension) and vector.shape == (dimension,):
-            return {"A": matrix, "b": vector, "updates": int(state.get("updates", 0)), "events": state.get("events", [])}
-    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
-        pass
     return {"A": np.eye(dimension), "b": np.zeros(dimension), "updates": 0, "events": []}
 
 
-def save_bandit_state(state: dict) -> None:
-    LINUCB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    serializable = {
+def load_bandit_state(owner_id: str | None = None) -> dict:
+    """This listener's LinUCB state; new listeners start from a fresh model."""
+    owner_id = owner_id or current_owner_id()
+    if not owner_id:
+        return fresh_bandit_state()
+    dimension = MODEL_CONTEXTS.shape[1]
+    try:
+        state = STORE.load_state(owner_id)
+        if state:
+            matrix = np.asarray(state["A"], dtype=float)
+            vector = np.asarray(state["b"], dtype=float)
+            if matrix.shape == (dimension, dimension) and vector.shape == (dimension,):
+                return {"A": matrix, "b": vector, "updates": int(state.get("updates", 0)), "events": state.get("events", [])}
+    except (sqlite3.Error, ValueError, KeyError, TypeError):
+        logging.warning("Could not read learning state; using a fresh model for this request.")
+    return fresh_bandit_state()
+
+
+def save_bandit_state(state: dict, owner_id: str | None = None) -> None:
+    owner_id = owner_id or current_owner_id(create=True)
+    if not owner_id:
+        raise RuntimeError("Learning state can only be saved during a listener request.")
+    STORE.save_state(owner_id, {
         "A": np.asarray(state["A"], dtype=float).tolist(),
         "b": np.asarray(state["b"], dtype=float).tolist(),
         "updates": int(state["updates"]),
         "events": state.get("events", [])[-50:],
-    }
-    temporary = LINUCB_PATH.with_suffix(".tmp")
-    temporary.write_text(json.dumps(serializable, separators=(",", ":")), encoding="utf-8")
-    temporary.replace(LINUCB_PATH)
+    })
 
 
 def update_bandit(track_idx: int, feedback: str) -> tuple[int, float]:
-    """Apply one explicit like/skip signal to a shared linear contextual bandit."""
+    """Apply one explicit like/skip signal to this listener's contextual bandit."""
     rewards = {"like": 2.0, "skip": -1.0}
     if feedback not in rewards:
         raise ValueError("Feedback must be like or skip.")
     context = MODEL_CONTEXTS[track_idx].astype(float)
     reward = rewards[feedback]
-    state = load_bandit_state()
-    state["A"] += np.outer(context, context)
-    state["b"] += reward * context
-    state["updates"] += 1
-    state["events"].append({
-        "track_idx": int(track_idx),
-        "track": TRACKS.iloc[track_idx]["_name"],
-        "artist": TRACKS.iloc[track_idx]["_artist_display"],
-        "feedback": feedback,
-        "reward": reward,
-        "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-    })
-    save_bandit_state(state)
+    owner_id = current_owner_id(create=True)
+    with _LEARNING_LOCK:
+        state = load_bandit_state(owner_id)
+        state["A"] += np.outer(context, context)
+        state["b"] += reward * context
+        state["updates"] += 1
+        state["events"].append({
+            "track_idx": int(track_idx),
+            "track": TRACKS.iloc[track_idx]["_name"],
+            "artist": TRACKS.iloc[track_idx]["_artist_display"],
+            "feedback": feedback,
+            "reward": reward,
+            "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        })
+        save_bandit_state(state, owner_id)
     return state["updates"], reward
 
 
@@ -484,18 +559,45 @@ def artist_main(row: pd.Series) -> str:
     return artists[0] if artists else ""
 
 
-def get_user_oauth(state: str | None = None, scopes: str | None = None) -> SpotifyOAuth:
+class UserTokenCache(CacheHandler):
+    """Spotipy token cache stored in one listener's database row."""
+
+    def __init__(self, user_id: str):
+        self.user_id = user_id
+
+    def get_cached_token(self):
+        # One request checks the token several times (connected? then the
+        # client itself); read the database once per request.
+        if has_request_context():
+            memo = g.setdefault("spotify_tokens", {})
+            if self.user_id not in memo:
+                memo[self.user_id] = STORE.get_token(self.user_id)
+            return memo[self.user_id]
+        return STORE.get_token(self.user_id)
+
+    def save_token_to_cache(self, token_info):
+        STORE.save_token(self.user_id, token_info)
+        if has_request_context():
+            g.setdefault("spotify_tokens", {})[self.user_id] = token_info
+
+
+def get_user_oauth(state: str | None = None, scopes: str | None = None, cache_handler: CacheHandler | None = None) -> SpotifyOAuth:
     client_id = os.getenv("SPOTIFY_CLIENT_ID")
     client_secret = os.getenv("SPOTIFY_CLIENT_SECRET")
     if not client_id or not client_secret:
         raise RuntimeError("Add SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET to the project .env file.")
+    if cache_handler is None:
+        # Each listener only ever sees their own token; anonymous visitors get
+        # an empty cache, so they are treated as "not connected".
+        user_id = current_user_id()
+        cache_handler = UserTokenCache(user_id) if user_id else MemoryCacheHandler()
     return SpotifyOAuth(
         client_id=client_id,
         client_secret=client_secret,
         redirect_uri=REDIRECT_URI,
         scope=scopes or SCOPES,
         state=state,
-        cache_path=str(ROOT / ".spotify_token_cache"),
+        cache_handler=cache_handler,
         open_browser=False,
         show_dialog=True,
     )
@@ -744,21 +846,23 @@ def add_liked_track_to_playlist(client, uri: str) -> tuple[dict, bool]:
 
 
 _HISTORY_TTL_SECONDS = 60
-_history_cache: dict = {"at": 0.0, "rows": ()}
+_history_cache: dict[str, tuple[float, tuple[int, ...]]] = {}
 
 
 def recent_history_rows(client) -> tuple[int, ...]:
-    """Recently played Spotify tracks mapped to catalog rows (briefly cached)."""
+    """This listener's recent Spotify plays mapped to catalog rows (briefly cached)."""
+    cache_key = current_user_id() or ""
     now = time.monotonic()
-    if now - _history_cache["at"] < _HISTORY_TTL_SECONDS:
-        return _history_cache["rows"]
+    cached_at, cached_rows = _history_cache.get(cache_key, (0.0, ()))
+    if cached_at and now - cached_at < _HISTORY_TTL_SECONDS:
+        return cached_rows
     try:
         history = client.current_user_recently_played(limit=50)
     except Exception:
         try:
             history = client.current_user_recently_played(limit=50)
         except Exception:
-            return tuple(_history_cache["rows"])
+            return cached_rows
     rows: list[int] = []
     seen: set[int] = set()
     for entry in history.get("items", []):
@@ -767,9 +871,8 @@ def recent_history_rows(client) -> tuple[int, ...]:
         if idx is not None and idx not in seen:
             seen.add(idx)
             rows.append(idx)
-    _history_cache["at"] = now
-    _history_cache["rows"] = tuple(rows)
-    return _history_cache["rows"]
+    _history_cache[cache_key] = (now, tuple(rows))
+    return tuple(rows)
 
 
 def mood_weight_vector(profile: dict) -> np.ndarray:
@@ -828,13 +931,14 @@ def pick_mood_anchors(
     return anchors
 
 
-@lru_cache(maxsize=8)
-def catalog_mood_mixes(updates: int, recent_rows: tuple[int, ...] = ()) -> tuple[dict, ...]:
+@lru_cache(maxsize=64)
+def catalog_mood_mixes(owner_id: str, updates: int, recent_rows: tuple[int, ...] = ()) -> tuple[dict, ...]:
     """Build four mood playlists from recent listening plus the recommender.
 
-    `updates` and `recent_rows` are cache keys: mixes rebuild when Like/Dislike
-    learning changes or the listening history changes.
+    `owner_id`, `updates` and `recent_rows` are cache keys: mixes rebuild per
+    listener when their Like/Dislike learning or listening history changes.
     """
+    learning_state = load_bandit_state(owner_id or None)
     mixes: list[dict] = []
     used_artists: set[str] = set()
     mood_scores = {
@@ -881,7 +985,7 @@ def catalog_mood_mixes(updates: int, recent_rows: tuple[int, ...] = ()) -> tuple
         for anchor in anchors:
             candidates = [(anchor, 1.0)] + [
                 (int(rec["index"]), float(rec.get("score", 0.0)))
-                for rec in recommend(anchor, limit=12, with_art=False)
+                for rec in recommend(anchor, limit=12, with_art=False, state=learning_state)
             ]
             # Content-similar tracks can still clash with the mix's intended
             # mood. Rank each anchor's suggestions by that same mood profile
@@ -944,7 +1048,12 @@ def catalog_mood_mixes(updates: int, recent_rows: tuple[int, ...] = ()) -> tuple
     return tuple(mixes)
 
 
-def recommend(seed_idx: int, limit: int = 8, with_art: bool = True) -> list[dict]:
+def recommend(seed_idx: int, limit: int = 8, with_art: bool = True, state: dict | None = None) -> list[dict]:
+    """Recommend for the current listener, or for an explicitly passed learning state.
+
+    Pass `state` when calling from worker threads, which have no request
+    (and therefore no listener) context of their own.
+    """
     seed = TRACKS.iloc[seed_idx]
     audio_scores = np.clip((AUDIO_VECTORS @ AUDIO_VECTORS[seed_idx] + 1.0) / 2.0, 0.0, 1.0)
     neighbor_count = min(5001, len(TRACKS))
@@ -1053,7 +1162,8 @@ def recommend(seed_idx: int, limit: int = 8, with_art: bool = True) -> list[dict
 
     # Use the tuned notebook classifier once real feedback contains both Like
     # and Skip. Before that, cold start relies on content signals and LinUCB.
-    state = load_bandit_state()
+    if state is None:
+        state = load_bandit_state()
     classifier_scores = classifier_probabilities(candidate_pool, state)
 
     # Keep the small online KNN as a fallback when the shared artifact is
@@ -1211,11 +1321,21 @@ def check_csrf():
             abort(400, "Invalid form token. Refresh the page and try again.")
 
 
+def current_user_profile() -> dict | None:
+    user_id = current_user_id()
+    if not user_id:
+        return None
+    name = session.get("display_name") or user_id
+    initials = "".join(part[0] for part in re.findall(r"[A-Za-z0-9]+", name)[:2]).upper() or "TT"
+    return {"id": user_id, "name": name, "initials": initials}
+
+
 @app.context_processor
 def inject_template_helpers():
     return {
         "csrf_token": csrf_value,
         "spotify_connected": spotify_connected,
+        "current_user": current_user_profile(),
         "bandit_update_count": load_bandit_state()["updates"],
     }
 
@@ -1468,6 +1588,7 @@ def spotify_queue():
 @app.get("/api/mood-mixes")
 def model_mood_mixes():
     """Four playlists seeded by recent listening and refreshed after feedback."""
+    owner_id = current_owner_id() or ""
     updates = int(load_bandit_state().get("updates", 0))
     recent_rows: tuple[int, ...] = ()
     if spotify_connected():
@@ -1475,7 +1596,7 @@ def model_mood_mixes():
             recent_rows = recent_history_rows(get_user_client())
         except Exception:
             recent_rows = ()
-    return {"mixes": list(catalog_mood_mixes(updates, recent_rows))}
+    return {"mixes": list(catalog_mood_mixes(owner_id, updates, recent_rows))}
 
 
 @app.post("/spotify/recommend-current")
@@ -1528,7 +1649,7 @@ def create_mood_playlist():
         except Exception:
             recent_rows = ()
         mix = next(
-            (item for item in catalog_mood_mixes(updates, recent_rows) if item["mood"] == mood),
+            (item for item in catalog_mood_mixes(current_owner_id() or "", updates, recent_rows) if item["mood"] == mood),
             None,
         )
         if not mix:
@@ -1608,8 +1729,8 @@ def spotify_player_feedback():
     try:
         if track_idx is not None:
             updates, _ = update_bandit(track_idx, feedback)
-    except OSError:
-        return {"error": "Could not save adaptive learning. Check that the models folder is writable."}, 500
+    except (OSError, sqlite3.Error, RuntimeError):
+        return {"error": "Could not save adaptive learning right now. Please try again."}, 500
 
     message = "Liked this song" if feedback == "like" else "Skip feedback saved"
     if updates is not None:
@@ -1646,7 +1767,8 @@ def learning_stats():
 
 @app.post("/api/learning/reset")
 def reset_learning():
-    save_bandit_state({"A": np.eye(MODEL_CONTEXTS.shape[1]), "b": np.zeros(MODEL_CONTEXTS.shape[1]), "updates": 0, "events": []})
+    """Reset only the current listener's learning, never anyone else's."""
+    save_bandit_state(fresh_bandit_state())
     return {"ok": True, "updates": 0}
 
 
@@ -1662,9 +1784,8 @@ def recommend_route():
 @app.get("/spotify/connect")
 def spotify_connect():
     try:
-        # Force Spotify to show the consent screen so a previously cached
-        # grant is replaced with the Web Playback SDK scopes above.
-        (ROOT / ".spotify_token_cache").unlink(missing_ok=True)
+        # `show_dialog=True` makes Spotify show the consent screen, so the
+        # listener can pick their account and grant the current scopes.
         state = secrets.token_urlsafe(24)
         session["spotify_oauth_state"] = state
         return redirect(get_user_oauth(state=state).get_authorize_url())
@@ -1688,10 +1809,48 @@ def spotify_callback():
         flash("Spotify did not return an authorization code.", "error")
         return redirect(url_for("home"))
     try:
-        get_user_oauth().get_access_token(code, as_dict=True, check_cache=False)
-        flash("Spotify connected. Choose a song and press Play when you are ready.", "success")
+        # Exchange the code without touching any stored token, then ask
+        # Spotify who this listener is; their Spotify ID becomes the account.
+        oauth = get_user_oauth(cache_handler=MemoryCacheHandler())
+        token = oauth.get_access_token(code, as_dict=True, check_cache=False)
+        profile = spotipy.Spotify(auth=token["access_token"]).me()
+    except spotipy.SpotifyException as exc:
+        if exc.http_status == 403:
+            flash("This Spotify account is not on TuneTwin's allowlist yet. Ask the app admin to add your Spotify email in the Spotify Developer Dashboard.", "error")
+        else:
+            flash(f"Spotify sign-in failed ({exc.http_status}). Please try again.", "error")
+        return redirect(url_for("home"))
     except Exception as exc:
         flash(f"Spotify authorization failed: {type(exc).__name__}. Check the redirect URI and app access.", "error")
+        return redirect(url_for("home"))
+
+    user_id = profile.get("id")
+    if not user_id:
+        flash("Spotify did not return an account ID. Please try again.", "error")
+        return redirect(url_for("home"))
+    display_name = profile.get("display_name") or user_id
+    STORE.upsert_user(user_id, display_name, token)
+    # Keep the Like/Skip history a visitor built before signing in, unless
+    # this account already has its own.
+    guest_id = session.pop("guest_id", None)
+    if guest_id:
+        STORE.adopt_state(guest_id, user_id)
+    session["user_id"] = user_id
+    session["display_name"] = display_name
+    session.permanent = True
+    flash(f"Signed in as {display_name}. Choose a song and press Play when you are ready.", "success")
+    return redirect(url_for("home"))
+
+
+@app.post("/logout")
+def logout():
+    """Sign out of this browser and forget the stored Spotify token."""
+    user_id = session.pop("user_id", None)
+    session.pop("display_name", None)
+    if user_id:
+        STORE.clear_token(user_id)
+        _history_cache.pop(user_id, None)
+    flash("Signed out of TuneTwin. Your Like/Skip learning is kept for next time.", "success")
     return redirect(url_for("home"))
 
 
@@ -1750,19 +1909,23 @@ def resolve_playlist_id(value: str) -> str | None:
 
 
 PLAYLIST_CACHE_TTL = 300  # seconds
-_PLAYLIST_PAYLOAD_CACHE: dict[str, tuple[float, dict]] = {}
-_PLAYLIST_REC_CACHE: dict[tuple[str, str, int], tuple[float, list[dict]]] = {}
+# Keyed by listener as well as playlist: a private playlist fetched with one
+# listener's token must never be served to another listener from the cache.
+_PLAYLIST_PAYLOAD_CACHE: dict[tuple[str, str], tuple[float, dict]] = {}
+_PLAYLIST_REC_CACHE: dict[tuple[str, str, str, int], tuple[float, list[dict]]] = {}
 
 
 def invalidate_playlist_cache(playlist_id: str) -> None:
-    _PLAYLIST_PAYLOAD_CACHE.pop(playlist_id, None)
-    for key in [key for key in _PLAYLIST_REC_CACHE if key[0] == playlist_id]:
+    for key in [key for key in _PLAYLIST_PAYLOAD_CACHE if key[1] == playlist_id]:
+        _PLAYLIST_PAYLOAD_CACHE.pop(key, None)
+    for key in [key for key in _PLAYLIST_REC_CACHE if key[1] == playlist_id]:
         _PLAYLIST_REC_CACHE.pop(key, None)
 
 
 def load_playlist_payload(client, playlist_id: str, max_tracks: int = 200) -> dict:
     """Fetch a playlist once and normalise the old and new Spotify shapes."""
-    cached = _PLAYLIST_PAYLOAD_CACHE.get(playlist_id)
+    cache_key = (current_user_id() or "", playlist_id)
+    cached = _PLAYLIST_PAYLOAD_CACHE.get(cache_key)
     if cached and time.time() - cached[0] < PLAYLIST_CACHE_TTL:
         return cached[1]
 
@@ -1804,31 +1967,35 @@ def load_playlist_payload(client, playlist_id: str, max_tracks: int = 200) -> di
         "tracks": tracks,
         "seed_rows": seed_rows,
     }
-    _PLAYLIST_PAYLOAD_CACHE[playlist_id] = (time.time(), payload)
+    _PLAYLIST_PAYLOAD_CACHE[cache_key] = (time.time(), payload)
     return payload
 
 
 def cached_playlist_recommendations(payload: dict, limit: int = 20) -> list[dict]:
-    """Cache the expensive model pass per playlist version and learning state."""
+    """Cache the expensive model pass per listener, playlist version and learning state."""
     if not payload["seed_rows"]:
         return []
-    updates = int(load_bandit_state().get("updates", 0))
-    key = (payload["playlist_id"], payload["snapshot_id"], updates)
+    state = load_bandit_state()
+    key = (current_owner_id() or "", payload["playlist_id"], payload["snapshot_id"], int(state.get("updates", 0)))
     cached = _PLAYLIST_REC_CACHE.get(key)
     if cached and time.time() - cached[0] < PLAYLIST_CACHE_TTL:
         return cached[1]
-    recommendations = playlist_recommendations(payload["seed_rows"], limit=limit)
+    recommendations = playlist_recommendations(payload["seed_rows"], limit=limit, state=state)
     _PLAYLIST_REC_CACHE[key] = (time.time(), recommendations)
     return recommendations
 
 
-def playlist_recommendations(seed_rows: list[int], limit: int = 20) -> list[dict]:
+def playlist_recommendations(seed_rows: list[int], limit: int = 20, state: dict | None = None) -> list[dict]:
     """Blend recommender output from several playlist seeds into one list."""
     seeds = list(dict.fromkeys(int(row) for row in seed_rows))[:5]
     playlist_songs = {SONG_KEYS[idx] for idx in seed_rows}
+    # Worker threads below have no request context, so read this listener's
+    # learning state here and hand it to every recommend() call.
+    if state is None:
+        state = load_bandit_state()
 
     def seed_recommendations(seed: int) -> list[int]:
-        return [rec["index"] for rec in recommend(seed, limit=8, with_art=False)]
+        return [rec["index"] for rec in recommend(seed, limit=8, with_art=False, state=state)]
 
     # Each recommend() pass is independent and read-only; running the seeds in
     # parallel keeps the first playlist open from feeling stuck.
@@ -2170,8 +2337,8 @@ def record_feedback():
         return redirect(url_for("home", seed=seed_idx) if seed_idx is not None else url_for("home"))
     try:
         updates, reward = update_bandit(row_idx, feedback)
-    except OSError:
-        flash("Could not save local LinUCB feedback. Check that the models folder is writable.", "error")
+    except (OSError, sqlite3.Error, RuntimeError):
+        flash("Could not save your LinUCB feedback right now. Please try again.", "error")
         return redirect(url_for("home", seed=seed_idx) if seed_idx is not None else url_for("home"))
 
     advanced = False
@@ -2235,4 +2402,4 @@ def health():
 if __name__ == "__main__":
     print(f"TuneTwin AI loaded {len(TRACKS):,} tracks using {len(AUDIO_FEATURES)} audio features.")
     print(f"Spotify callback must exactly match the developer dashboard URI: {REDIRECT_URI}")
-    app.run(host="127.0.0.1", port=int(os.getenv("PORT", "8888")), debug=False)
+    app.run(host=os.getenv("HOST", "127.0.0.1"), port=int(os.getenv("PORT", "8888")), debug=False)

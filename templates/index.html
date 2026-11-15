@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#111018">
   <link rel="icon" href="data:,">
   <title>TuneTwin AI · Music Player</title>
@@ -11,10 +11,38 @@
   <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800;900&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v={{ range(1000, 9999) | random }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='feedback.css') }}?v={{ range(1000, 9999) | random }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='enhance.css') }}?v={{ range(1000, 9999) | random }}">
   {% if connected %}<script defer src="https://sdk.scdn.co/spotify-player.js"></script>{% endif %}
   <script defer src="{{ url_for('static', filename='app.js') }}?v={{ range(1000, 9999) | random }}"></script>
+  <script defer src="{{ url_for('static', filename='visualizer.js') }}?v={{ range(1000, 9999) | random }}"></script>
 </head>
 <body>
+  <!-- Embedded pages (e.g. the Hugging Face Space page) block the session
+       cookie and Spotify's login page, so send listeners to the direct URL. -->
+  <div class="embed-notice" id="embed-notice" hidden>
+    Spotify sign-in does not work inside this embedded view.
+    <a id="embed-notice-link" href="/" target="_blank" rel="noopener">Open TuneTwin in a new tab</a>
+  </div>
+  <script>
+    try {
+      if (window.self !== window.top) {
+        document.getElementById("embed-notice-link").href = window.location.href;
+        document.getElementById("embed-notice").hidden = false;
+      }
+    } catch (error) {
+      document.getElementById("embed-notice").hidden = false;
+    }
+  </script>
+  <!-- Show the intro once per browser tab, unless a song was chosen. -->
+  <script>
+    try {
+      if (!sessionStorage.getItem("tunetwin-intro-seen") && !/[?&]seed=/.test(location.search)) {
+        document.documentElement.classList.add("intro-active");
+      }
+    } catch (error) {
+      document.documentElement.classList.add("intro-active");
+    }
+  </script>
   <!-- SVG Symbols Sprite -->
   <svg class="sprite" aria-hidden="true">
     <symbol id="i-logo" viewBox="0 0 24 24"><path d="M4 14v-4M8 18V6M12 15V9M16 20V4M20 13v-2" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></symbol>
@@ -61,8 +89,32 @@
     <span class="backdrop-orb c"></span>
   </div>
 
+  <!-- Intro hero: the equalizer (#fx-viz) shows beside this text -->
+  <section class="intro" id="intro" aria-label="Welcome to TuneTwin">
+    <div class="intro-orbs" aria-hidden="true"><span></span><span></span><span></span></div>
+    <div class="intro-copy">
+      <span class="intro-kicker"><i></i>AI music twin</span>
+      <h1 class="intro-title" aria-label="TuneTwin"><span>Tune</span><span>Twin</span></h1>
+      <p class="intro-sub">Pick one song. Get eight that sound like you, from a recommender that learns with every like and skip.</p>
+      <ul class="intro-chips" aria-label="Techniques used">
+        <li>PCA</li><li>K-Means</li><li>KNN</li><li>LinUCB</li>
+      </ul>
+      <div class="intro-actions">
+        <button type="button" class="intro-btn primary" id="intro-start">Start listening</button>
+        {% if current_user and connected %}
+        <span class="intro-user"><i></i>Signed in as {{ current_user.name }}</span>
+        {% else %}
+        <a class="intro-btn" href="{{ url_for('spotify_connect') }}"><svg><use href="#i-spotify"/></svg>Connect Spotify</a>
+        {% endif %}
+      </div>
+      <p class="intro-stats"><b>{{ "{:,.0f}".format(song_count) }}</b> tracks <span>·</span> <b>{{ pca_components }}</b>-D taste map <span>·</span> learns per listener</p>
+    </div>
+    <span class="intro-hint" aria-hidden="true">press Enter to start</span>
+  </section>
+
   <!-- Centered Floating Desktop App Window -->
   <div class="app" id="app">
+    <canvas id="fx-viz" aria-hidden="true"></canvas>
     <!-- Left Sidebar -->
     <aside class="sidebar">
       <!-- 🔴 🟡 🟢 macOS Window Control Dots -->
@@ -160,9 +212,22 @@
             <svg><use href="#i-spotify"/></svg>
             <span>Spotify</span>
           </span>
-          <a class="profile-chip" href="{{ url_for('spotify_connect') }}" title="{% if connected %}Spotify Connected{% else %}Connect Spotify{% endif %}" aria-label="TuneTwin profile and Spotify connection">
-            <span class="profile-avatar profile-initials" aria-hidden="true">TT</span>
+          {% if current_user and connected %}
+          <span class="profile-chip" title="Signed in as {{ current_user.name }}" aria-label="Signed in as {{ current_user.name }}">
+            <span class="profile-avatar profile-initials" aria-hidden="true">{{ current_user.initials }}</span>
+            <span class="profile-name">{{ current_user.name }}</span>
+          </span>
+          {% else %}
+          <a class="profile-chip" href="{{ url_for('spotify_connect') }}" title="{% if current_user %}Reconnect Spotify{% else %}Connect Spotify{% endif %}" aria-label="{% if current_user %}Reconnect Spotify{% else %}Connect Spotify{% endif %}">
+            <span class="profile-avatar profile-initials" aria-hidden="true">{{ current_user.initials if current_user else 'TT' }}</span>
           </a>
+          {% endif %}
+          {% if current_user %}
+          <form method="post" action="{{ url_for('logout') }}" class="signout-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="signout-btn">Sign out</button>
+          </form>
+          {% endif %}
         </div>
       </header>
 

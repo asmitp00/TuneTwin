@@ -2196,3 +2196,14 @@ body { display:block; }
   #player-panel .player-right-actions .player-action-btn { width:24px; }
   #player-panel .player-volume-range { flex-basis:48px; width:48px; min-width:42px; }
 }
+
+/* Signed-in listener: sign-out control beside the profile chip */
+.signout-form { margin:0; display:inline-flex; }
+.signout-btn { font:inherit; font-size:11px; font-weight:600; color:#c3c0cc; background:transparent; border:1px solid rgba(255,255,255,.14); border-radius:999px; padding:4px 10px; cursor:pointer; white-space:nowrap; transition:color .16s ease, background .16s ease; }
+.signout-btn:hover { color:#fff; background:rgba(255,255,255,.08); }
+.signout-btn:focus-visible { outline:2px solid color-mix(in srgb,var(--cover-b) 70%,#fff); outline-offset:2px; }
+
+/* Shown only when the app is framed (e.g. on the Hugging Face Space page) */
+.embed-notice { position:relative; z-index:1000; padding:10px 16px; text-align:center; font-size:13px; font-weight:600; color:#fff; background:#7a2e55; }
+.embed-notice[hidden] { display:none; }
+.embed-notice a { color:#fff; text-decoration:underline; margin-left:6px; }

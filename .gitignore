@@ -19,3 +19,6 @@ run_notebook.py
 diversify_recommendations.py
 penalize_unknown_genres.py
 artist_diversity.py
+instance/
+.venv/
+.venv312/

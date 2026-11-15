@@ -7,3 +7,6 @@ joblib
 spotipy
 python-dotenv
 Flask
+gunicorn
+psycopg[binary]
+psycopg-pool
