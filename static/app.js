@@ -168,7 +168,7 @@ function setPlayIcon(playing) {
 
 /* -------------------------------------------------- Cover-art palette */
 const appEl = document.querySelector("#app");
-const appCoverStorageKey = "tunetwin-last-cover-art";
+const appCoverStorageKey = "resona-last-cover-art";
 
 function setAppCoverBackground(image) {
   let backdrop = image || "";
@@ -454,7 +454,7 @@ function initialiseBrowserPlayer() {
   if (!connected || !window.Spotify?.Player || browserPlayer) return browserReady;
   browserReady = new Promise((resolve, reject) => {
     browserPlayer = new Spotify.Player({
-      name: "TuneTwin web player",
+      name: "Resona web player",
       volume: 0.5,
       getOAuthToken: async (callback) => {
         try { callback((await api("/api/spotify/token")).access_token); }
@@ -653,15 +653,15 @@ if (queueSection && queueList) {
 }
 document.querySelector("#queue-popover")?.remove();
 document.querySelector("#reset-learning")?.addEventListener("click", async () => {
-  if (!confirm("Reset all saved TuneTwin Like/Dislike learning for this demo?")) return;
+  if (!confirm("Reset all saved Resona Like/Dislike learning for this demo?")) return;
   try { await api("/api/learning/reset", { method: "POST" }); await refreshLearning(); location.reload(); }
   catch (error) { alert(error.message); }
 });
 document.querySelectorAll(".feedback-form").forEach((form) => form.addEventListener("submit", () => setTimeout(refreshLearning, 700)));
 
 // Play without a page reload so the web player state stays intact.
-const autoQueueKey = "tunetwin-auto-queue";
-const queueStoreKey = "tunetwin-queue";
+const autoQueueKey = "resona-auto-queue";
+const queueStoreKey = "resona-queue";
 let playInFlight = false;
 let appQueue = [];
 let queueMode = "auto";
@@ -690,7 +690,7 @@ function paintAutoQueue() {
 function saveQueue() {
   try {
     sessionStorage.setItem(queueStoreKey, JSON.stringify(appQueue));
-    sessionStorage.setItem("tunetwin-queue-mode", queueMode);
+    sessionStorage.setItem("resona-queue-mode", queueMode);
   } catch (error) { /* storage unavailable */ }
 }
 
@@ -698,7 +698,7 @@ function restoreQueue() {
   try {
     const stored = JSON.parse(sessionStorage.getItem(queueStoreKey) || "[]");
     if (Array.isArray(stored)) appQueue = stored.filter((track) => track && track.uri);
-    const mode = sessionStorage.getItem("tunetwin-queue-mode");
+    const mode = sessionStorage.getItem("resona-queue-mode");
     if (["auto", "track", "mix", "playlist"].includes(mode)) queueMode = mode;
   } catch (error) { /* ignore malformed storage */ }
 }

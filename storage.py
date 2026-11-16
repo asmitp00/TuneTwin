@@ -1,4 +1,4 @@
-"""Per-listener persistence for TuneTwin.
+"""Per-listener persistence for Resona.
 
 Every listener gets their own row for:
   * their Spotify OAuth token (users table), and
@@ -69,7 +69,7 @@ class Storage:
                 kwargs={"row_factory": dict_row, "prepare_threshold": None},
                 check=ConnectionPool.check_connection,
                 max_idle=240,
-                name="tunetwin",
+                name="resona",
                 open=True,
             )
             self.description = "PostgreSQL"

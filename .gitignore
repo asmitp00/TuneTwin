@@ -3,7 +3,7 @@
 .cache
 app_server*.log
 models/*
-!models/tunetwin_recommender.joblib
+!models/resona_recommender.joblib
 .ipynb_checkpoints/
 __pycache__/
 data/

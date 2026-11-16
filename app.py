@@ -1,4 +1,4 @@
-"""Local Flask app for TuneTwin AI's genre-aware Spotify recommender."""
+"""Local Flask app for Resona's genre-aware Spotify recommender."""
 
 from __future__ import annotations
 
@@ -41,18 +41,18 @@ from sklearn.metrics import silhouette_score
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
 
-DATA_PATH = Path(os.getenv("TUNETWIN_DATA_PATH", ROOT / "data" / "data.csv"))
-GENRE_PATH = Path(os.getenv("TUNETWIN_GENRE_PATH", ROOT / "data" / "extracted" / "data" / "data_w_genres.csv"))
+DATA_PATH = Path(os.getenv("RESONA_DATA_PATH", ROOT / "data" / "data.csv"))
+GENRE_PATH = Path(os.getenv("RESONA_GENRE_PATH", ROOT / "data" / "extracted" / "data" / "data_w_genres.csv"))
 REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:8888/callback")
 # The Web Playback SDK validates all three browser-identifying scopes in
 # addition to `streaming`; without the email/private pair it returns the
 # unhelpful client-side error: "Invalid token scopes."
 SCOPES = "user-read-playback-state user-modify-playback-state streaming user-read-currently-playing user-read-recently-played user-read-email user-read-private playlist-read-private playlist-modify-private playlist-modify-public"
 PLAYBACK_SCOPES = {"user-read-playback-state", "user-modify-playback-state", "user-read-currently-playing", "streaming", "user-read-email", "user-read-private"}
-DB_PATH = Path(os.getenv("TUNETWIN_DB_PATH", ROOT / "instance" / "tunetwin.db"))
+DB_PATH = Path(os.getenv("RESONA_DB_PATH", ROOT / "instance" / "resona.db"))
 # An https callback means the app is deployed behind TLS, not running locally.
 DEPLOYED = REDIRECT_URI.startswith("https://")
-RECOMMENDER_ARTIFACT_PATH = ROOT / "models" / "tunetwin_recommender.joblib"
+RECOMMENDER_ARTIFACT_PATH = ROOT / "models" / "resona_recommender.joblib"
 LINUCB_ALPHA = 0.20
 LINUCB_BLEND = 0.25
 CLASSIFIER_BLEND = 0.25
@@ -76,7 +76,7 @@ if not _secret_key:
     if DEPLOYED:
         # A random per-process key would sign every listener out on each
         # restart, and would differ between server processes.
-        raise RuntimeError("Set FLASK_SECRET_KEY before deploying TuneTwin.")
+        raise RuntimeError("Set FLASK_SECRET_KEY before deploying Resona.")
     logging.warning("FLASK_SECRET_KEY is not set; using a temporary key (sessions reset on restart).")
 app.secret_key = _secret_key or secrets.token_urlsafe(32)
 app.config.update(
@@ -92,7 +92,7 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 # DATABASE_URL (e.g. a Neon PostgreSQL URL) keeps accounts and learning across
 # restarts; without it, a local SQLite file is used.
 STORE = Storage(os.getenv("DATABASE_URL") or DB_PATH)
-logging.getLogger(__name__).warning("TuneTwin storage: %s", STORE.description)
+logging.getLogger(__name__).warning("Resona storage: %s", STORE.description)
 if DEPLOYED and STORE.backend == "sqlite":
     logging.warning("Deployed without DATABASE_URL: accounts and learning live in a local SQLite file and may be lost on restart.")
 _LEARNING_LOCK = threading.Lock()
@@ -687,7 +687,7 @@ def spotify_art_for(spotify_id: str) -> str | None:
     """Album art via Spotify's public oEmbed endpoint (no auth, reliable)."""
     url = f"https://open.spotify.com/oembed?url=https://open.spotify.com/track/{spotify_id}"
     try:
-        request = urllib.request.Request(url, headers={"User-Agent": "TuneTwin/1.0"})
+        request = urllib.request.Request(url, headers={"User-Agent": "Resona/1.0"})
         with urllib.request.urlopen(request, timeout=8) as response:
             payload = json.loads(response.read().decode("utf-8"))
         return payload.get("thumbnail_url")
@@ -836,8 +836,8 @@ def playlist_track_uris(client, playlist_id: str) -> set[str]:
 def add_liked_track_to_playlist(client, uri: str) -> tuple[dict, bool]:
     playlist = find_or_create_private_playlist(
         client,
-        "TuneTwin Liked Songs",
-        "Tracks explicitly liked in TuneTwin.",
+        "Resona Liked Songs",
+        "Tracks explicitly liked in Resona.",
     )
     if uri in playlist_track_uris(client, playlist["id"]):
         return playlist, False
@@ -1528,7 +1528,7 @@ def playlist_recommend():
     except Exception:
         return {"error": "That Spotify playlist could not be opened."}, 404
     if not payload["seed_rows"]:
-        return {"error": "None of this playlist's tracks are in the TuneTwin catalogue."}, 404
+        return {"error": "None of this playlist's tracks are in the Resona catalogue."}, 404
     return playlist_response(payload)
 
 
@@ -1655,7 +1655,7 @@ def create_mood_playlist():
         if not mix:
             flash("The model could not build that mix.", "error")
             return redirect(url_for("home"))
-        title = f"TuneTwin {mix['name']}"
+        title = f"Resona {mix['name']}"
         uris = []
         missing = 0
         for track in mix["tracks"]:
@@ -1744,7 +1744,7 @@ def spotify_player_feedback():
         try:
             playlist, newly_liked = add_liked_track_to_playlist(client, item["uri"])
             result["playlist_url"] = (playlist.get("external_urls") or {}).get("spotify")
-            result["message"] += " and saved in TuneTwin Liked Songs" if newly_liked else " · already in TuneTwin Liked Songs"
+            result["message"] += " and saved in Resona Liked Songs" if newly_liked else " · already in Resona Liked Songs"
         except Exception as exc:
             result["message"] += f" · learning saved; reconnect Spotify to allow private playlist access ({type(exc).__name__})"
     else:
@@ -1816,7 +1816,7 @@ def spotify_callback():
         profile = spotipy.Spotify(auth=token["access_token"]).me()
     except spotipy.SpotifyException as exc:
         if exc.http_status == 403:
-            flash("This Spotify account is not on TuneTwin's allowlist yet. Ask the app admin to add your Spotify email in the Spotify Developer Dashboard.", "error")
+            flash("This Spotify account is not on Resona's allowlist yet. Ask the app admin to add your Spotify email in the Spotify Developer Dashboard.", "error")
         else:
             flash(f"Spotify sign-in failed ({exc.http_status}). Please try again.", "error")
         return redirect(url_for("home"))
@@ -1850,7 +1850,7 @@ def logout():
     if user_id:
         STORE.clear_token(user_id)
         _history_cache.pop(user_id, None)
-    flash("Signed out of TuneTwin. Your Like/Skip learning is kept for next time.", "success")
+    flash("Signed out of Resona. Your Like/Skip learning is kept for next time.", "success")
     return redirect(url_for("home"))
 
 
@@ -2050,7 +2050,7 @@ def api_play():
             # The Web Playback SDK can silently pause after a few seconds on
             # some browsers/accounts. Prefer a normal Spotify Connect device;
             # users can still explicitly select another device in the UI.
-            real_devices = [d for d in devices if d.get("name") != "TuneTwin browser player"]
+            real_devices = [d for d in devices if d.get("name") != "Resona browser player"]
             active_device = next((d for d in real_devices if d.get("is_active")), None)
             device = active_device or (real_devices[0] if real_devices else None) or next((d for d in devices if d.get("is_active")), None) or devices[0]
         if not device.get("is_active"):
@@ -2255,9 +2255,9 @@ def play_track():
                 requested_device = request.form.get("device_id")
                 device = next((d for d in devices if d.get("id") == requested_device), None) if requested_device else None
                 if device is None:
-                    browser_device = next((d for d in devices if d.get("name") == "TuneTwin browser player"), None)
+                    browser_device = next((d for d in devices if d.get("name") == "Resona browser player"), None)
                     active_device = next((d for d in devices if d.get("is_active")), None)
-                    real_device = next((d for d in devices if d.get("name") != "TuneTwin browser player"), None)
+                    real_device = next((d for d in devices if d.get("name") != "Resona browser player"), None)
                     device = browser_device or active_device or real_device or devices[0]
                 if not device.get("is_active"):
                     try:
@@ -2280,7 +2280,7 @@ def play_track():
                 missing = 0
                 failed = 0
                 # Spotify does not offer a queue-clear endpoint. Avoid adding
-                # TuneTwin tracks that are already in the current queue, and
+                # Resona tracks that are already in the current queue, and
                 # de-duplicate Spotify URI matches within this enqueue pass.
                 queued_uris = set()
                 try:
@@ -2374,11 +2374,11 @@ def record_feedback():
     if advanced:
         message += " Spotify advanced to the next queued track."
     elif feedback == "like":
-        message += " This updates TuneTwin only; it does not add the song to Spotify Liked Songs."
+        message += " This updates Resona only; it does not add the song to Spotify Liked Songs."
     if feedback == "like" and liked_playlist_added:
-        message += f" Added to TuneTwin Liked Songs: {liked_playlist_url}"
+        message += f" Added to Resona Liked Songs: {liked_playlist_url}"
     elif feedback == "like" and spotify_connected():
-        message += " The TuneTwin Liked Songs playlist already has this track, or Spotify could not match it."
+        message += " The Resona Liked Songs playlist already has this track, or Spotify could not match it."
     flash(message, "success")
     return redirect(url_for("home", seed=seed_idx) if seed_idx is not None else url_for("home"))
 
@@ -2400,6 +2400,6 @@ def health():
 
 
 if __name__ == "__main__":
-    print(f"TuneTwin AI loaded {len(TRACKS):,} tracks using {len(AUDIO_FEATURES)} audio features.")
+    print(f"Resona loaded {len(TRACKS):,} tracks using {len(AUDIO_FEATURES)} audio features.")
     print(f"Spotify callback must exactly match the developer dashboard URI: {REDIRECT_URI}")
     app.run(host=os.getenv("HOST", "127.0.0.1"), port=int(os.getenv("PORT", "8888")), debug=False)

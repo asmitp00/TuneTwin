@@ -1,6 +1,6 @@
-# TuneTwin web app image (used by the Hugging Face Docker Space).
+# Resona web app image (used by the Hugging Face Docker Space).
 # Python 3.12 + scikit-learn 1.9.0 match the environment that trained
-# models/tunetwin_recommender.joblib.
+# models/resona_recommender.joblib.
 FROM python:3.12-slim
 
 # Hugging Face runs Space containers as user ID 1000.
@@ -20,7 +20,7 @@ RUN pip install --no-cache-dir --user -r requirements-deploy.txt
 COPY --chown=user app.py storage.py ./
 COPY --chown=user templates templates
 COPY --chown=user static static
-COPY --chown=user models/tunetwin_recommender.joblib models/
+COPY --chown=user models/resona_recommender.joblib models/
 COPY --chown=user data/data.csv data/
 COPY --chown=user data/extracted/data/data_w_genres.csv data/extracted/data/
 RUN mkdir -p instance

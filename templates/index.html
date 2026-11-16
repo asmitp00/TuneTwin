@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#111018">
   <link rel="icon" href="data:,">
-  <title>TuneTwin AI · Music Player</title>
+  <title>Resona · Music Player</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800;900&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -15,13 +15,13 @@
   {% if connected %}<script defer src="https://sdk.scdn.co/spotify-player.js"></script>{% endif %}
   <script defer src="{{ url_for('static', filename='app.js') }}?v={{ range(1000, 9999) | random }}"></script>
   <script defer src="{{ url_for('static', filename='visualizer.js') }}?v={{ range(1000, 9999) | random }}"></script>
-</head>
+  <script type="module" src="{{ url_for('static', filename='hero.js') }}?v={{ range(1000, 9999) | random }}"></script></head>
 <body>
   <!-- Embedded pages (e.g. the Hugging Face Space page) block the session
        cookie and Spotify's login page, so send listeners to the direct URL. -->
   <div class="embed-notice" id="embed-notice" hidden>
     Spotify sign-in does not work inside this embedded view.
-    <a id="embed-notice-link" href="/" target="_blank" rel="noopener">Open TuneTwin in a new tab</a>
+    <a id="embed-notice-link" href="/" target="_blank" rel="noopener">Open Resona in a new tab</a>
   </div>
   <script>
     try {
@@ -33,15 +33,17 @@
       document.getElementById("embed-notice").hidden = false;
     }
   </script>
-  <!-- Show the intro once per browser tab, unless a song was chosen. -->
+  <!-- Show the scroll hero when someone arrives from outside (a shared link,
+       a bookmark, or back from Spotify sign-in). Page reloads caused by the
+       app itself (choosing a song, signing out) go straight to the app. -->
   <script>
-    try {
-      if (!sessionStorage.getItem("tunetwin-intro-seen") && !/[?&]seed=/.test(location.search)) {
-        document.documentElement.classList.add("intro-active");
-      }
-    } catch (error) {
-      document.documentElement.classList.add("intro-active");
-    }
+    (function () {
+      var skip = /[?&]seed=/.test(location.search) || location.hash === "#app";
+      try {
+        if (document.referrer && new URL(document.referrer).origin === location.origin) skip = true;
+      } catch (error) { /* unreadable referrer: show the hero */ }
+      if (!skip) document.documentElement.classList.add("hero-active");
+    })();
   </script>
   <!-- SVG Symbols Sprite -->
   <svg class="sprite" aria-hidden="true">
@@ -89,27 +91,66 @@
     <span class="backdrop-orb c"></span>
   </div>
 
-  <!-- Intro hero: the equalizer (#fx-viz) shows beside this text -->
-  <section class="intro" id="intro" aria-label="Welcome to TuneTwin">
-    <div class="intro-orbs" aria-hidden="true"><span></span><span></span><span></span></div>
-    <div class="intro-copy">
-      <span class="intro-kicker"><i></i>AI music twin</span>
-      <h1 class="intro-title" aria-label="TuneTwin"><span>Tune</span><span>Twin</span></h1>
-      <p class="intro-sub">Pick one song. Get eight that sound like you, from a recommender that learns with every like and skip.</p>
-      <ul class="intro-chips" aria-label="Techniques used">
-        <li>PCA</li><li>K-Means</li><li>KNN</li><li>LinUCB</li>
-      </ul>
-      <div class="intro-actions">
-        <button type="button" class="intro-btn primary" id="intro-start">Start listening</button>
-        {% if current_user and connected %}
-        <span class="intro-user"><i></i>Signed in as {{ current_user.name }}</span>
-        {% else %}
-        <a class="intro-btn" href="{{ url_for('spotify_connect') }}"><svg><use href="#i-spotify"/></svg>Connect Spotify</a>
-        {% endif %}
+  <!-- Scroll hero: a 3D scene (static/hero.js) above the app. Scrolling plays
+       the story and then reveals the app underneath. -->
+  <section class="hero" id="hero" tabindex="-1" aria-label="Welcome to Resona">
+    <div class="hero-track">
+      <div class="hero-stage" id="hero-stage">
+        <div class="hero-bg" aria-hidden="true"></div>
+
+        <div class="hero-title-wrap">
+          <span class="hero-kicker">AI music twin</span>
+          <h1 class="hero-title" aria-label="Resona">
+            <span style="--i:0">R</span><span style="--i:1">E</span><span style="--i:2">S</span><span style="--i:3">O</span><span style="--i:4">N</span><span style="--i:5">A</span>
+          </h1>
+          <p class="hero-tag">Find the songs that sound like you.</p>
+        </div>
+
+        <canvas id="hero-gl" aria-hidden="true"></canvas>
+
+        <header class="hero-nav">
+          <span class="hero-brand"><i></i>Resona</span>
+          <div class="hero-nav-actions">
+            {% if current_user and connected %}
+            <span class="hero-user">Signed in as <b>{{ current_user.name }}</b></span>
+            {% else %}
+            <a class="hero-btn" href="{{ url_for('spotify_connect') }}"><svg><use href="#i-spotify"/></svg>Connect<span class="hero-hide-sm"> Spotify</span></a>
+            {% endif %}
+            <button type="button" class="hero-btn primary" data-hero-enter>Enter app</button>
+          </div>
+        </header>
+
+        <article class="hero-step" data-from="0.17" data-to="0.37">
+          <span class="hero-num">01</span>
+          <h2>Pick one song.</h2>
+          <p>Search {{ "{:,.0f}".format(song_count) }} tracks, or start from whatever is playing on your Spotify.</p>
+        </article>
+        <article class="hero-step" data-from="0.39" data-to="0.59">
+          <span class="hero-num">02</span>
+          <h2>Get eight that sound like you.</h2>
+          <p>PCA folds 15 audio features into a {{ pca_components }}-D taste map. KNN finds the songs sitting closest to yours.</p>
+        </article>
+        <article class="hero-step" data-from="0.61" data-to="0.79">
+          <span class="hero-num">03</span>
+          <h2>It learns from every like and skip.</h2>
+          <p>A LinUCB bandit keeps a model just for you. Nobody else's clicks can change your list.</p>
+        </article>
+        <article class="hero-cta" data-from="0.81" data-to="0.95">
+          <span class="hero-num">04</span>
+          <h2>Ready when you are.</h2>
+          <div class="hero-cta-actions">
+            <button type="button" class="hero-btn primary big" data-hero-enter>Start listening</button>
+            {% if not (current_user and connected) %}
+            <a class="hero-btn big" href="{{ url_for('spotify_connect') }}"><svg><use href="#i-spotify"/></svg>Connect Spotify</a>
+            {% endif %}
+          </div>
+          <p class="hero-stats"><b>{{ "{:,.0f}".format(song_count) }}</b> tracks · <b>{{ pca_components }}</b>-D taste map · learns per listener</p>
+        </article>
+
+        <div class="hero-scroll" aria-hidden="true">Scroll<i></i></div>
+        <div class="hero-progress" aria-hidden="true"><i></i></div>
       </div>
-      <p class="intro-stats"><b>{{ "{:,.0f}".format(song_count) }}</b> tracks <span>·</span> <b>{{ pca_components }}</b>-D taste map <span>·</span> learns per listener</p>
     </div>
-    <span class="intro-hint" aria-hidden="true">press Enter to start</span>
   </section>
 
   <!-- Centered Floating Desktop App Window -->
@@ -205,7 +246,7 @@
           <button type="button" class="nav-tab" data-view="model">Model</button>
         </nav>
 
-        <!-- Spotify connection and TuneTwin profile -->
+        <!-- Spotify connection and Resona profile -->
         <div class="topbar-right">
           <span class="spotify-status" aria-label="{% if connected %}Spotify connected{% else %}Spotify not connected{% endif %}">
             <span class="spotify-status-dot {% if connected %}online{% endif %}"></span>
@@ -258,7 +299,7 @@
               <div class="stage-artist-row">
                 <span class="track-meta-group" id="artist-meta"><span class="meta-label">Artist:</span><span class="now-artist" id="now-artist">Pick a song to start</span></span>
                 <span class="track-meta-group" id="album-meta" hidden><span class="meta-label">Album:</span><span class="now-album" id="now-album"></span></span>
-                <span id="now-source" hidden>TuneTwin AI</span>
+                <span id="now-source" hidden>Resona</span>
                 <span id="hero-playing-label" hidden>Ready when you are</span>
               </div>
             </header>

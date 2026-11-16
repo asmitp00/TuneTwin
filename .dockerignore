@@ -6,5 +6,5 @@ instance
 __pycache__
 *.ipynb
 data/archive.zip
-models/tunetwin_testing_artifacts.joblib
+models/resona_testing_artifacts.joblib
 models/linucb_live.json
